@@ -8,6 +8,8 @@ export type SocketEvent =
   | { type: 'newMessage'; message: MessageDto; clientId: string | null }
   /** Sent to the recipient's own room, whether or not the chat is open. */
   | { type: 'messageNotification'; message: MessageDto }
+  /** Something new in the notification list; carries the bell's count. */
+  | { type: 'notification'; unreadCount: number }
   | { type: 'typing'; userId: string; isTyping: boolean }
   | { type: 'read'; conversationId: string; readBy: string }
   | { type: 'presence'; userId: string; isOnline: boolean }
@@ -73,6 +75,9 @@ class ChatSocket {
     created.on('message_notification', (p: MessagePayload) => {
       if (p?.message) this.events.emit({ type: 'messageNotification', message: p.message });
     });
+    created.on('notification', (p: { unreadCount?: number }) =>
+      this.events.emit({ type: 'notification', unreadCount: p?.unreadCount ?? 0 }),
+    );
     created.on('user_typing', (p: { userId?: string; isTyping?: boolean }) =>
       this.events.emit({ type: 'typing', userId: p?.userId ?? '', isTyping: !!p?.isTyping }),
     );

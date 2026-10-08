@@ -5,11 +5,20 @@ import { useApp } from '../data/store';
 import { ChatScreen } from '../screens/chat/ChatScreen';
 import { MainScreen } from '../screens/main/MainScreen';
 import { MatchOverlay } from '../screens/match/MatchOverlay';
+import { NotificationsScreen } from '../screens/notifications/NotificationsScreen';
 import { EditProfileScreen } from '../screens/me/EditProfileScreen';
 import { ProfileViewsScreen } from '../screens/me/ProfileViewsScreen';
 import { PersonProfileScreen } from '../screens/profile/PersonProfileScreen';
 import { BlockedUsersScreen, SettingsScreen } from '../screens/settings/SettingsScreen';
-import { CoinsSheet, InsightsSheet, MoreSheet, UnlockChatSheet, WelcomeCoinsSheet } from '../screens/sheets/Sheets';
+import {
+  CoinsSheet,
+  InsightsSheet,
+  LikeLimitSheet,
+  MessageRequestSheet,
+  MoreSheet,
+  PlusSheet,
+  WelcomeCoinsSheet,
+} from '../screens/sheets/Sheets';
 import { shell, shellNav, useShell } from './shell';
 import { Stack } from './Stack';
 
@@ -59,6 +68,7 @@ export function MainFlow() {
           { path: '/blocked', element: <BlockedUsersScreen /> },
           { path: '/edit-profile', element: <EditProfileScreen /> },
           { path: '/views', element: <ProfileViewsScreen /> },
+          { path: '/notifications', element: <NotificationsScreen /> },
         ]}
       />
 
@@ -80,18 +90,37 @@ export function MainFlow() {
           onDismiss={shell.closeSheet}
         />
       )}
-      {sheet?.kind === 'unlock' && (
-        <UnlockChatSheet
+      {sheet?.kind === 'request' && (
+        <MessageRequestSheet
           person={sheet.person}
           wallet={wallet}
-          unlocking={state.unlocking}
-          onUnlock={() => void shell.unlock(sheet.person)}
+          draft={state.requestDraft}
+          sending={state.sendingRequest}
+          onDraft={shell.setRequestDraft}
+          onSend={() => void shell.sendRequest(sheet.person)}
+          onPlus={shell.openPlus}
           onDismiss={shell.closeSheet}
         />
       )}
       {sheet?.kind === 'insights' && (
-        <InsightsSheet wallet={wallet} onUnlock={() => void shell.buyInsights()} onDismiss={shell.closeSheet} />
+        <InsightsSheet
+          wallet={wallet}
+          buying={state.buyingInsights}
+          onPlus={shell.openPlus}
+          onBuy={(days) => void shell.buyInsights(days)}
+          onDismiss={shell.closeSheet}
+        />
       )}
+      {sheet?.kind === 'plus' && (
+        <PlusSheet
+          wallet={wallet}
+          busy={state.plusBusy}
+          onBuy={(plan, renew) => void shell.buyPlus(plan, renew)}
+          onCancelRenew={shell.confirmCancelPlus}
+          onDismiss={shell.closeSheet}
+        />
+      )}
+      {sheet?.kind === 'likeLimit' && <LikeLimitSheet wallet={wallet} onPlus={shell.openPlus} onDismiss={shell.closeSheet} />}
       {sheet?.kind === 'bonus' && <WelcomeCoinsSheet bonus={sheet.bonus} wallet={wallet} onDismiss={shell.closeSheet} />}
       {sheet?.kind === 'more' && (
         <MoreSheet

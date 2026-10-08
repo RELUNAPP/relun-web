@@ -1,11 +1,12 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { LinkButton, OutlineButton, PrimaryButton } from '../../components/Buttons';
-import { RelunSheet } from '../../components/Controls';
+import { RelunSheet, Switch } from '../../components/Controls';
 import { Icon } from '../../components/Icon';
+import { RelunTextField } from '../../components/Inputs';
 import { useSegment } from '../../components/segment';
 import { Avatar, CoinIcon } from '../../components/Visuals';
 import type { CoinPackageDto, PendingBonusDto } from '../../data/dtos';
-import { firstName, initialOf, mainPhotoUrl, type Person, type Wallet } from '../../data/models';
+import { firstName, initialOf, mainPhotoUrl, type Person, type PlusPlan, type Wallet } from '../../data/models';
 import { RelunColors, T } from '../../theme';
 import { formatCoins, formatMoney } from '../../util/format';
 
@@ -51,7 +52,7 @@ export function CoinsSheet(props: {
           <span style={{ ...T.bodySmall, color: RelunColors.WarningText }}>Your balance</span>
           <span style={{ ...T.headlineMedium, color: RelunColors.Ink }}>{formatCoins(wallet.balance)}</span>
         </div>
-        {wallet.balance < wallet.chatUnlockCost && (
+        {wallet.balance < wallet.messageRequestCost && (
           <span style={{ ...T.labelSmall, color: RelunColors.Error, borderRadius: 999, background: RelunColors.ErrorFill, padding: '4px 10px' }}>
             Low
           </span>
@@ -115,8 +116,8 @@ export function CoinsSheet(props: {
         </div>
       ))}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <Perk icon="chat_bubble" text={`Start a chat with a match · ${wallet.chatUnlockCost} coins`} />
-        <Perk icon="visibility" text={`See Likes & Views · ${wallet.insightsCost} coins / 30 days`} />
+        <Perk icon="mark_chat_unread" text={`Message someone without matching · ${wallet.messageRequestCost} coins`} />
+        <Perk icon="visibility" text={`See Likes & Views · ${wallet.insights7Cost} coins / 7 days`} />
       </div>
       <PrimaryButton
         text={pkg ? `Buy ${formatCoins(pkg.coins)} coins · ${priceOf(pkg)}` : 'Loading packages…'}
@@ -141,57 +142,140 @@ function Perk({ icon, text }: { icon: string; text: string }) {
   );
 }
 
-export function UnlockChatSheet(props: {
+/**
+ * Messaging someone without a match. Free while the weekly (or Plus monthly)
+ * allowance lasts; after that it costs coins, and says plainly that the coins
+ * are gone even if they decline or never answer.
+ */
+export function MessageRequestSheet(props: {
   person: Person;
   wallet: Wallet;
-  unlocking: boolean;
-  onUnlock: () => void;
+  draft: string;
+  sending: boolean;
+  onDraft: (text: string) => void;
+  onSend: () => void;
+  onPlus: () => void;
   onDismiss: () => void;
 }) {
-  const { person, wallet, unlocking, onUnlock, onDismiss } = props;
-  const enough = wallet.balance >= wallet.chatUnlockCost;
+  const { person, wallet, draft, sending, onDraft, onSend, onPlus, onDismiss } = props;
+  const name = firstName(person);
+  const cost = wallet.messageRequestCost;
+  const freeLeft = wallet.requests.left ?? 0;
+  const free = freeLeft > 0;
+  const enough = free || wallet.balance >= cost;
+  // The allowance resets on Lagos time: Monday for the free one, the 1st for Plus.
+  const resetAt = wallet.requests.resetAt;
+  const usedUp = wallet.plus
+    ? `You’ve used your ${wallet.requests.limit ?? wallet.plusPerks.monthlyRequests} Plus message requests this month.${
+        resetAt ? ` More on ${resetAt.toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'Africa/Lagos' })}.` : ''
+      }`
+    : `You’ve used your free message request this week.${
+        resetAt ? ` Your next free one is on ${resetAt.toLocaleDateString(undefined, { weekday: 'long', timeZone: 'Africa/Lagos' })}.` : ''
+      }`;
   const small: CSSProperties = { ...T.bodySmall, fontSize: 14, color: RelunColors.Body, whiteSpace: 'pre' };
   return (
     <RelunSheet onDismiss={onDismiss}>
       <div style={center}>
         <Avatar url={mainPhotoUrl(person)} seed={person.id} initial={initialOf(person)} size={80} />
-        <span style={{ ...T.titleLarge, color: RelunColors.Ink, textAlign: 'center' }}>Start Conversation?</span>
+        <span style={{ ...T.titleLarge, color: RelunColors.Ink, textAlign: 'center' }}>{`Message ${name} without matching?`}</span>
         <span style={{ ...T.bodyMedium, color: RelunColors.Muted, textAlign: 'center' }}>
-          {`Unlock chat with ${firstName(person)} for ${wallet.chatUnlockCost} coins. It stays open for good, for both of you.`}
+          {`You can send up to 3 messages. If ${name} replies, you match and keep chatting for free.`}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span style={small}>{'Balance '}</span>
-          <span style={{ ...T.labelMedium, color: RelunColors.Ink }}>{formatCoins(wallet.balance)}</span>
-          <span style={small}>{' coins'}</span>
+      </div>
+      <RelunTextField
+        value={draft}
+        onChange={onDraft}
+        placeholder={`Say something to ${name}…`}
+        singleLine={false}
+        minLines={3}
+        maxLength={1000}
+        autoFocus
+      />
+      {free ? (
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            width: '100%',
+            borderRadius: 14,
+            background: RelunColors.SuccessFill,
+            padding: '12px 14px',
+          }}
+        >
+          <Icon name="redeem" size={17} color={RelunColors.SuccessText} style={{ marginTop: 1 }} />
+          <span style={{ ...T.bodySmall, lineHeight: '18px', color: RelunColors.SuccessText }}>
+            {wallet.plus
+              ? `Free with Relun Plus · ${freeLeft} of ${wallet.requests.limit} left this month.`
+              : 'Free: you get 1 free message request a week.'}
+          </span>
         </div>
-        {!enough && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '100%',
-              borderRadius: 14,
-              background: RelunColors.ErrorFill,
-              padding: 10,
-            }}
-          >
-            <Icon name="error" size={16} color={RelunColors.Error} />
-            <span style={{ ...T.bodySmall, fontSize: 14, fontWeight: 500, color: RelunColors.Error, whiteSpace: 'pre' }}>
-              {'  Not enough coins'}
-            </span>
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            width: '100%',
+            borderRadius: 14,
+            background: RelunColors.WarningFill,
+            padding: '12px 14px',
+          }}
+        >
+          <Icon name="info" size={17} color={RelunColors.WarningText} style={{ marginTop: 1 }} />
+          <span style={{ ...T.bodySmall, lineHeight: '18px', color: RelunColors.WarningText }}>
+            {`This costs ${cost} coins. Coins are not refunded if ${name} declines or doesn’t reply.`}
+          </span>
+        </div>
+      )}
+      {!free && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+          <span style={{ ...T.bodySmall, color: RelunColors.Body }}>{usedUp}</span>
+          {!wallet.plus && wallet.plans.length > 0 && (
+            <button
+              type="button"
+              className="press-plain"
+              onClick={onPlus}
+              style={{ ...T.bodySmall, fontWeight: 600, color: RelunColors.Ink, textAlign: 'left', textDecoration: 'underline' }}
+            >
+              {`Get ${wallet.plusPerks.monthlyRequests} free message requests a month with Relun Plus`}
+            </button>
+          )}
+        </div>
+      )}
+      <div style={{ ...center, gap: 10 }}>
+        {!free && (
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={small}>{'Balance '}</span>
+            <span style={{ ...T.labelMedium, color: RelunColors.Ink }}>{formatCoins(wallet.balance)}</span>
+            <span style={small}>{' coins'}</span>
           </div>
         )}
-        <PrimaryButton text={enough ? `Unlock for ${wallet.chatUnlockCost} coins` : 'Top Up'} onClick={onUnlock} loading={unlocking} />
+        <PrimaryButton
+          text={free ? 'Send for free' : enough ? `Send for ${cost} coins` : 'Top Up'}
+          onClick={onSend}
+          enabled={!enough || /\S/.test(draft)}
+          loading={sending}
+        />
         <LinkButton text="Not now" onClick={onDismiss} style={{ width: '100%' }} />
       </div>
     </RelunSheet>
   );
 }
 
-export function InsightsSheet(props: { wallet: Wallet; onUnlock: () => void; onDismiss: () => void }) {
-  const { wallet, onUnlock, onDismiss } = props;
+/**
+ * Likes & Views: Relun Plus (cheaper, and more), or a coin pass for people who
+ * would rather not subscribe.
+ */
+export function InsightsSheet(props: {
+  wallet: Wallet;
+  buying: boolean;
+  onPlus: () => void;
+  onBuy: (days: 7 | 30) => void;
+  onDismiss: () => void;
+}) {
+  const { wallet, buying, onPlus, onBuy, onDismiss } = props;
   const seg = useSegment();
+  const weekly = wallet.plans.find((p) => p.id === 'weekly');
+  const small: CSSProperties = { ...T.bodySmall, fontSize: 14, color: RelunColors.Body, whiteSpace: 'pre' };
   return (
     <RelunSheet onDismiss={onDismiss}>
       <div style={center}>
@@ -210,12 +294,265 @@ export function InsightsSheet(props: { wallet: Wallet; onUnlock: () => void; onD
         </div>
         <span style={{ ...T.titleLarge, color: RelunColors.Ink, textAlign: 'center' }}>See who likes you</span>
         <span style={{ ...T.bodyMedium, color: RelunColors.Muted, textAlign: 'center' }}>
-          Unlock Who Liked You and Profile Views for 30 days.
+          See who liked you and who viewed your profile.
         </span>
-        <PrimaryButton
-          text={wallet.balance >= wallet.insightsCost ? `Unlock for ${wallet.insightsCost} coins` : 'Get coins to unlock'}
-          onClick={onUnlock}
-        />
+      </div>
+      <button
+        type="button"
+        className="press"
+        onClick={onPlus}
+        style={{
+          width: '100%',
+          borderRadius: 20,
+          border: `2px solid ${seg.fill}`,
+          background: seg.tint,
+          padding: 16,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          textAlign: 'left',
+        }}
+      >
+        <Icon name="workspace_premium" size={28} color={seg.text} />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ ...T.titleSmall, color: RelunColors.Ink }}>Get Relun Plus</span>
+          <span style={{ ...T.bodySmall, color: RelunColors.Body }}>
+            {`Likes & Views, unlimited likes and free message requests${weekly ? ` · from ${formatMoney(weekly.amount, weekly.currency)}/week` : ''}`}
+          </span>
+        </div>
+        <Icon name="chevron_right" size={22} color={seg.text} />
+      </button>
+      <span style={{ ...T.labelMedium, fontSize: 15, color: RelunColors.Ink }}>Or use coins</span>
+      <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+        {([7, 30] as const).map((days) => {
+          const cost = days === 7 ? wallet.insights7Cost : wallet.insights30Cost;
+          return (
+            <button
+              key={days}
+              type="button"
+              className="press"
+              disabled={buying}
+              onClick={() => onBuy(days)}
+              style={{
+                flex: 1,
+                borderRadius: 18,
+                border: `1.5px solid ${RelunColors.Border}`,
+                background: '#FFFFFF',
+                padding: '14px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span style={{ ...T.titleSmall, color: RelunColors.Ink }}>{`${days} days`}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <CoinIcon size={18} />
+                <span style={{ ...T.labelMedium, color: RelunColors.Ink }}>{formatCoins(cost)}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ ...center, gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <span style={small}>{'Balance '}</span>
+          <span style={{ ...T.labelMedium, color: RelunColors.Ink }}>{formatCoins(wallet.balance)}</span>
+          <span style={small}>{' coins'}</span>
+        </div>
+        <LinkButton text="Not now" onClick={onDismiss} style={{ width: '100%' }} />
+      </div>
+    </RelunSheet>
+  );
+}
+
+const shortDate = (d: Date) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+
+/**
+ * Relun Plus. Without it: the perks, the two plans, and on the web the choice
+ * between an auto-renewing card plan and a one-time pass (card, transfer or
+ * USSD). With it: what it is, when it renews or ends, and turning renewal off.
+ */
+export function PlusSheet(props: {
+  wallet: Wallet;
+  busy: boolean;
+  onBuy: (plan: 'weekly' | 'monthly', renew: boolean) => void;
+  onCancelRenew: () => void;
+  onDismiss: () => void;
+}) {
+  const { wallet, busy, onBuy, onCancelRenew, onDismiss } = props;
+  const seg = useSegment();
+  const plus = wallet.plus;
+  const [planId, setPlanId] = useState<'weekly' | 'monthly'>('monthly');
+  const plan = wallet.plans.find((p) => p.id === planId) ?? wallet.plans[0];
+  const [renewChoice, setRenew] = useState(true);
+  const renew = renewChoice && !!plan?.autoRenewAvailable;
+  const canBuy = !plus?.autoRenew;
+  const period = (p: PlusPlan) => (p.id === 'weekly' ? 'week' : 'month');
+
+  return (
+    <RelunSheet onDismiss={onDismiss}>
+      <div style={center}>
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 20,
+            background: seg.fill,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Icon name="workspace_premium" size={32} color={seg.onFill} />
+        </div>
+        <span style={{ ...T.titleLarge, color: RelunColors.Ink, textAlign: 'center' }}>Relun Plus</span>
+      </div>
+
+      {plus && (
+        <div
+          style={{
+            width: '100%',
+            borderRadius: 18,
+            background: RelunColors.SuccessFill,
+            padding: 14,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+          }}
+        >
+          <span style={{ ...T.titleSmall, color: RelunColors.SuccessText }}>
+            {`You’re on Plus · ${plus.plan === 'weekly' ? 'Weekly' : 'Monthly'}`}
+          </span>
+          <span style={{ ...T.bodySmall, color: RelunColors.SuccessText }}>
+            {plus.autoRenew ? `Renews ${shortDate(plus.until)}` : `Ends ${shortDate(plus.until)}`}
+            {plus.source === 'play' ? ' · Manage it in Google Play' : ''}
+          </span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+        <Perk icon="favorite" text="Unlimited likes" />
+        <Perk icon="visibility" text="See who likes you and who viewed you" />
+        <Perk icon="mark_chat_unread" text={`${wallet.plusPerks.monthlyRequests} free message requests a month`} />
+        <Perk icon="event" text={`Up to ${wallet.plusPerks.activeDates} date plans live at once`} />
+      </div>
+
+      {canBuy && plan && (
+        <>
+          <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+            {wallet.plans.map((p) => {
+              const on = p.id === plan.id;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="press"
+                  onClick={() => setPlanId(p.id)}
+                  aria-pressed={on}
+                  style={{
+                    flex: 1,
+                    position: 'relative',
+                    borderRadius: 18,
+                    border: `2px solid ${on ? seg.fill : RelunColors.Border}`,
+                    background: on ? seg.tint : '#FFFFFF',
+                    // Room for the "Best value" tag, which sits inside the card (buttons clip overflow).
+                    padding: '30px 12px 14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  {p.id === 'monthly' && (
+                    <span
+                      style={{
+                        ...T.labelSmall,
+                        fontSize: 10,
+                        color: seg.onFill,
+                        background: seg.fill,
+                        borderRadius: 999,
+                        padding: '2px 8px',
+                        position: 'absolute',
+                        top: 8,
+                      }}
+                    >
+                      Best value
+                    </span>
+                  )}
+                  <span style={{ ...T.labelMedium, color: RelunColors.Body }}>{p.id === 'weekly' ? 'Weekly' : 'Monthly'}</span>
+                  <span style={{ ...T.titleMedium, color: RelunColors.Ink }}>{formatMoney(p.amount, p.currency)}</span>
+                  <span style={{ ...T.bodySmall, fontSize: 12, color: RelunColors.Muted }}>{`per ${period(p)}`}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {plan.autoRenewAvailable && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ ...T.titleSmall, fontSize: 15, color: RelunColors.Ink }}>Renew automatically</span>
+                <span style={{ ...T.bodySmall, color: RelunColors.Muted }}>
+                  {renew
+                    ? `Charged to your card each ${period(plan)}. Cancel anytime.`
+                    : 'Pay once by card, bank transfer or USSD. Doesn’t renew.'}
+                </span>
+              </div>
+              <Switch checked={renew} onToggle={() => setRenew(!renewChoice)} label="Renew automatically" />
+            </div>
+          )}
+
+          <PrimaryButton
+            text={
+              renew
+                ? `Subscribe · ${formatMoney(plan.amount, plan.currency)}/${period(plan)}`
+                : `${plus ? 'Add' : 'Get'} ${plan.days} days · ${formatMoney(plan.amount, plan.currency)}`
+            }
+            onClick={() => onBuy(plan.id, renew)}
+            loading={busy}
+          />
+        </>
+      )}
+
+      {plus?.autoRenew && plus.source === 'paystack' && (
+        <OutlineButton text={busy ? 'Turning off…' : 'Turn off auto-renew'} onClick={onCancelRenew} height={48} />
+      )}
+      <LinkButton text={plus ? 'Close' : 'Not now'} onClick={onDismiss} style={{ width: '100%' }} />
+    </RelunSheet>
+  );
+}
+
+/** Out of free likes for today: when they come back, and Plus for unlimited. */
+export function LikeLimitSheet(props: { wallet: Wallet; onPlus: () => void; onDismiss: () => void }) {
+  const { wallet, onPlus, onDismiss } = props;
+  const seg = useSegment();
+  const resetAt = wallet.likes.resetAt;
+  const ms = resetAt ? resetAt.getTime() - Date.now() : 0;
+  const hours = Math.floor(ms / 3_600_000);
+  const minutes = Math.max(1, Math.floor((ms % 3_600_000) / 60_000));
+  const when = !resetAt || ms <= 0 ? 'soon' : hours > 0 ? `in ${hours}h ${minutes}m` : `in ${minutes}m`;
+  return (
+    <RelunSheet onDismiss={onDismiss}>
+      <div style={center}>
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 20,
+            background: seg.tint,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Icon name="heart_broken" size={30} color={seg.text} />
+        </div>
+        <span style={{ ...T.titleLarge, color: RelunColors.Ink, textAlign: 'center' }}>You’re out of likes for today</span>
+        <span style={{ ...T.bodyMedium, color: RelunColors.Muted, textAlign: 'center' }}>
+          {`You get ${wallet.likes.limit ?? 15} free likes a day. New ones arrive ${when}.`}
+        </span>
+        <PrimaryButton text="Get unlimited likes with Plus" onClick={onPlus} leadingIcon="workspace_premium" />
         <LinkButton text="Not now" onClick={onDismiss} style={{ width: '100%' }} />
       </div>
     </RelunSheet>
@@ -257,8 +594,16 @@ export function WelcomeCoinsSheet(props: { bonus: PendingBonusDto; wallet: Walle
         </span>
       </div>
       <span style={{ ...T.labelMedium, fontSize: 15, marginTop: 4 }}>What coins are for</span>
-      <CoinUse icon="chat_bubble" title="Start a chat" body={`Unlock a conversation with a match. ${wallet.chatUnlockCost} coins, open for good.`} />
-      <CoinUse icon="visibility" title="See who likes you" body={`Who liked you and who viewed your profile, for 30 days. ${wallet.insightsCost} coins.`} />
+      <CoinUse
+        icon="mark_chat_unread"
+        title="Message without matching"
+        body={`Send someone a message request before you match. ${wallet.messageRequestCost} coins.`}
+      />
+      <CoinUse
+        icon="visibility"
+        title="See who likes you"
+        body={`Who liked you and who viewed your profile. ${wallet.insights7Cost} coins for 7 days.`}
+      />
       <PrimaryButton text="Start exploring" onClick={onDismiss} style={{ marginTop: 4 }} />
     </RelunSheet>
   );

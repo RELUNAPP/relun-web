@@ -36,7 +36,7 @@ export function DiscoverTab() {
         below={<SegmentPill text={`${seg.label} · nearby`} small />}
         actions={
           <>
-            <CoinPill balance={wallet.balance} low={wallet.balance < wallet.chatUnlockCost} onClick={actions.openCoins} />
+            <CoinPill balance={wallet.balance} low={wallet.balance < wallet.messageRequestCost} onClick={actions.openCoins} />
             <CircleIconButton icon="tune" outline label="Filters" onClick={() => vm.openFilters(true)} />
           </>
         }

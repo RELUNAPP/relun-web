@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BrowserRouter, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { BrowserRouter, useNavigate, useParams } from 'react-router-dom';
 import { ToastHost } from './components/Controls';
 import { RingsMark } from './components/Visuals';
 import { auth } from './data/repositories';
@@ -26,43 +26,33 @@ export function App() {
   );
 }
 
-/** Set once a visitor picks "Continue on web", so the landing page doesn't greet them again. */
-const CONTINUED_KEY = 'relun.web.continued';
-
-const readContinued = () => {
-  try {
-    return localStorage.getItem(CONTINUED_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
-
 /**
- * Signed-out visitors arriving at / in a browser see the full-width landing page
- * first. The installed app, deep links and anyone who already continued go
+ * Every signed-out visitor arriving at / in a browser sees the full-width
+ * landing page first, including after signing out. "Continue on web" hides it
+ * until the next visit. Signed-in users, the installed app and deep links go
  * straight to the phone column.
  */
 function Shell() {
-  const signedOut = useApp((s) => s.auth.kind === 'signedOut');
-  const [landing, setLanding] = useState(() => window.location.pathname === '/' && !isStandalone() && !readContinued());
+  const authKind = useApp((s) => s.auth.kind);
+  const signedOut = authKind === 'signedOut';
+  const [landing, setLanding] = useState(() => window.location.pathname === '/' && !isStandalone());
 
   useEffect(() => {
     void auth.bootstrap();
   }, []);
 
+  // Signing out lands back on /, so greet them with the landing page again.
+  // Only a real sign-out: the first load also goes loading -> signedOut, and a
+  // deep link like /code/email must keep its screen.
+  const lastKind = useRef(authKind);
+  useEffect(() => {
+    const was = lastKind.current;
+    lastKind.current = authKind;
+    if (authKind === 'signedOut' && (was === 'signedIn' || was === 'onboarding') && !isStandalone()) setLanding(true);
+  }, [authKind]);
+
   if (landing && signedOut) {
-    return (
-      <LandingPage
-        onContinue={() => {
-          try {
-            localStorage.setItem(CONTINUED_KEY, '1');
-          } catch {
-            // Private mode: they'll just see the landing page again next visit.
-          }
-          setLanding(false);
-        }}
-      />
-    );
+    return <LandingPage onContinue={() => setLanding(false)} />;
   }
 
   return (
@@ -95,7 +85,9 @@ function Root() {
     if (lastKind.current !== kind) {
       const fromLoading = lastKind.current === 'loading';
       lastKind.current = kind;
-      if (!fromLoading || kind !== 'signedIn') navigate('/', { replace: true });
+      // Signed out keeps it too: a phone may reload a backgrounded tab while
+      // someone fetches their sign-in code, and that must land back on /code.
+      if (!fromLoading || (kind !== 'signedIn' && kind !== 'signedOut')) navigate('/', { replace: true });
     }
   }, [kind, navigate]);
 
@@ -118,12 +110,10 @@ function Root() {
 
 function CodeRoute() {
   const { method = 'phone' } = useParams();
-  const [params] = useSearchParams();
   const back = useBack();
   return (
     <CodeSignInScreen
       initialMethod={method === 'email' ? 'email' : 'phone'}
-      returning={params.get('returning') === '1'}
       onBack={back}
     />
   );
@@ -137,7 +127,6 @@ function SignedOutFlow() {
         <WelcomeScreen
           onPhone={() => navigate('/code/phone')}
           onEmail={() => navigate('/code/email')}
-          onSignIn={() => navigate('/code/phone?returning=1')}
         />
       }
       routes={[{ path: '/code/:method', element: <CodeRoute /> }]}

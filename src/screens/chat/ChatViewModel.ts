@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, MessageStatus, Person } from '../../data/models';
+import type { ChatMessage, MessageRequest, MessageStatus, Person } from '../../data/models';
 import { chat, people } from '../../data/repositories';
 import type { SocketEvent } from '../../data/socket';
-import { useApp } from '../../data/store';
+import { messenger, useApp } from '../../data/store';
 
 /** Port of Android ChatViewModel. */
 
@@ -15,9 +15,25 @@ export type ChatState = {
   otherTyping: boolean;
   otherOnline: boolean;
   draft: string;
+  /** Set while this chat runs on a message request rather than a match. */
+  request: MessageRequest | null;
+  declining: boolean;
 };
 
-export const isLocked = (s: ChatState): boolean => s.person != null && s.person.isMatch && !s.person.chatUnlocked;
+/** Why the sender of a message request can't write right now, if they can't. */
+export const requestBlock = (s: ChatState): 'declined' | 'waiting' | null => {
+  const r = s.request;
+  if (!r?.outgoing) return null;
+  if (r.status === 'declined') return 'declined';
+  return r.remaining <= 0 ? 'waiting' : null;
+};
+
+/** The request was accepted (a reply either way): the two are now a match with the chat open. */
+const accepted = (s: ChatState): ChatState => ({
+  ...s,
+  request: null,
+  person: s.person ? { ...s.person, isMatch: true, liked: true, messageRequest: null } : null,
+});
 
 const uuid = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -39,6 +55,8 @@ export function useChatViewModel(userId: string, initialName: string) {
     otherTyping: false,
     otherOnline: false,
     draft: '',
+    request: null,
+    declining: false,
   }));
   /** The live state, for timers and socket handlers (Android's _state.value). */
   const ref = useRef(state);
@@ -85,12 +103,12 @@ export function useChatViewModel(userId: string, initialName: string) {
       // The header keeps the name it was opened with.
     }
     try {
-      const history = await chat.history(userId);
+      const thread = await chat.thread(userId);
       if (!alive.current) return;
       update((s) => {
         // Keep any unsent bubbles from this session.
         const pending = s.messages.filter((m) => m.status === 'sending' || m.status === 'failed');
-        return { ...s, messages: [...history, ...pending], loading: false };
+        return { ...s, messages: [...thread.messages, ...pending], request: thread.request, loading: false };
       });
       chat.socket.markRead(userId);
       chat.refreshUnread();
@@ -149,10 +167,16 @@ export function useChatViewModel(userId: string, initialName: string) {
   const send = useCallback(
     (textOverride?: string) => {
       const text = (textOverride ?? ref.current.draft).trim();
-      if (!text || isLocked(ref.current)) return;
+      if (!text || requestBlock(ref.current)) return;
       const clientId = uuid();
       const bubble: ChatMessage = { id: clientId, clientId, mine: true, text, sentAt: new Date(), status: 'sending' };
-      update((s) => ({ ...s, messages: [...s.messages, bubble], draft: textOverride == null ? '' : s.draft }));
+      update((s) => ({
+        ...s,
+        messages: [...s.messages, bubble],
+        draft: textOverride == null ? '' : s.draft,
+        // One fewer message left on a request; the server has the final say.
+        request: s.request?.outgoing ? { ...s.request, remaining: s.request.remaining - 1 } : s.request,
+      }));
       signalTyping(false);
       dispatch(bubble);
     },
@@ -180,6 +204,9 @@ export function useChatViewModel(userId: string, initialName: string) {
           const m = event.message;
           if (m.senderId !== userId && m.receiverId !== userId) return;
           const incoming = chat.toChatMessage(m, event.clientId);
+          // A reply on a request accepts it, whichever side this device is.
+          const req = ref.current.request;
+          const replied = req?.status === 'pending' && incoming.mine !== req.outgoing;
           update((s) => {
             const mine = event.clientId != null ? s.messages.findIndex((x) => x.clientId === event.clientId) : -1;
             let messages: ChatMessage[];
@@ -191,9 +218,11 @@ export function useChatViewModel(userId: string, initialName: string) {
             } else {
               messages = [...s.messages, incoming];
             }
-            return { ...s, messages, otherTyping: !incoming.mine ? false : s.otherTyping };
+            const next = { ...s, messages, otherTyping: !incoming.mine ? false : s.otherTyping };
+            return replied ? accepted(next) : next;
           });
           if (!incoming.mine) chat.socket.markRead(userId);
+          if (replied) people.emit({ type: 'matched', userId });
           break;
         }
         case 'typing':
@@ -220,8 +249,10 @@ export function useChatViewModel(userId: string, initialName: string) {
           break;
         case 'error':
           if (event.clientId) setStatus(event.clientId, 'failed');
-          if (event.code === 'LOCKED') {
-            update((s) => ({ ...s, person: s.person ? { ...s.person, chatUnlocked: false } : null }));
+          if (event.code === 'REQUEST_LIMIT') {
+            update((s) => ({ ...s, request: s.request ? { ...s.request, remaining: 0 } : null }));
+          } else if (event.code === 'REQUEST_DECLINED') {
+            update((s) => ({ ...s, request: s.request ? { ...s.request, status: 'declined', remaining: 0 } : null }));
           }
           break;
         case 'messageNotification':
@@ -231,8 +262,8 @@ export function useChatViewModel(userId: string, initialName: string) {
 
     const offSocket = chat.socket.events.on(onSocketEvent);
     const offPeople = people.events.on((e) => {
-      if (e.type === 'chatUnlocked' && e.userId === userId) {
-        update((s) => ({ ...s, person: s.person ? { ...s.person, chatUnlocked: true } : null }));
+      if (e.type === 'matched' && e.userId === userId) {
+        update((s) => ({ ...s, person: s.person ? { ...s.person, isMatch: true } : null }));
       }
     });
 
@@ -255,5 +286,19 @@ export function useChatViewModel(userId: string, initialName: string) {
     };
   }, [userId, load, update, setStatus]);
 
-  return { state, locked: isLocked(state), connected, load, setDraft, send, retry };
+  /** Turns down an incoming message request. Resolves true once it's gone. */
+  const decline = useCallback(async () => {
+    if (ref.current.declining) return false;
+    update((s) => ({ ...s, declining: true }));
+    try {
+      await chat.declineRequest(userId);
+      return true;
+    } catch (e) {
+      update((s) => ({ ...s, declining: false }));
+      messenger.error(e instanceof Error && e.message ? e.message : 'Couldn’t decline. Try again.');
+      return false;
+    }
+  }, [userId, update]);
+
+  return { state, blocked: requestBlock(state), connected, load, setDraft, send, retry, decline };
 }

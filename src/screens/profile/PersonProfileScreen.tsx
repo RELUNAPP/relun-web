@@ -4,6 +4,7 @@ import { Icon, Spinner } from '../../components/Icon';
 import { useSegment } from '../../components/segment';
 import { CoinIcon, EmptyState, PersonPhoto, SectionHeader, SegmentPill } from '../../components/Visuals';
 import { initialOf, type Person } from '../../data/models';
+import { useApp } from '../../data/store';
 import { useAppActions } from '../../navigation/actions';
 import { RelunColors, T } from '../../theme';
 import { formatDistance, formatHeight, formatLastActive } from '../../util/format';
@@ -68,7 +69,11 @@ function Content({ person, onLike, onPass }: { person: Person; onLike: () => voi
 
   const meta: CSSProperties = { ...T.bodyMedium, fontSize: 16, color: RelunColors.Body };
   const flow: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8 };
-  const enabled = person.isMatch;
+  const requestCost = useApp((st) => st.wallet.messageRequestCost);
+  const freeRequest = useApp((st) => (st.wallet.requests.left ?? 0) > 0);
+  const request = person.messageRequest;
+  // Matches chat; anyone else can be messaged through a paid request unless they've turned those off.
+  const enabled = person.isMatch || request != null || person.acceptsMessageRequests;
   const fg = enabled ? seg.onFill : RelunColors.DisabledText;
   const msgText: CSSProperties = { ...T.labelLarge, fontSize: 16, color: fg };
 
@@ -255,19 +260,31 @@ function Content({ person, onLike, onPass }: { person: Person; onLike: () => voi
               whiteSpace: 'pre',
             }}
           >
-            {!person.isMatch ? (
+            {!person.isMatch && request ? (
+              <>
+                <Icon name="chat_bubble" size={18} color={fg} />
+                <span style={{ width: 8 }} />
+                <span style={msgText}>{request.outgoing ? 'View message' : 'Reply'}</span>
+              </>
+            ) : !person.isMatch && person.acceptsMessageRequests ? (
+              <>
+                <Icon name="chat_bubble" outline size={18} color={fg} />
+                <span style={{ width: 8 }} />
+                {freeRequest ? (
+                  <span style={msgText}>Message · Free</span>
+                ) : (
+                  <>
+                    <span style={msgText}>{'Message · '}</span>
+                    <CoinIcon size={20} />
+                    <span style={msgText}>{` ${requestCost}`}</span>
+                  </>
+                )}
+              </>
+            ) : !person.isMatch ? (
               <>
                 <Icon name="lock" size={17} color={fg} />
                 <span style={{ width: 8 }} />
                 <span style={msgText}>Match to message</span>
-              </>
-            ) : !person.chatUnlocked ? (
-              <>
-                <Icon name="chat_bubble" outline size={18} color={fg} />
-                <span style={{ width: 8 }} />
-                <span style={msgText}>{'Message · '}</span>
-                <CoinIcon size={20} />
-                <span style={msgText}>{' 15'}</span>
               </>
             ) : (
               <>

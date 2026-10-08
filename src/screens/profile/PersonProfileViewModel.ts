@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { firstName, type Person } from '../../data/models';
-import { people } from '../../data/repositories';
+import { isLikeLimit, people } from '../../data/repositories';
 import { messenger } from '../../data/store';
 
 export type PersonState = { person: Person | null; loading: boolean; error: string | null };
@@ -32,8 +32,9 @@ export function usePersonProfileViewModel(userId: string) {
     alive.current = true;
     load();
     const off = people.events.on((e) => {
-      if (e.type === 'chatUnlocked' && e.userId === userId) update((p) => ({ ...p, chatUnlocked: true }));
+      if (e.type === 'matched' && e.userId === userId) update((p) => ({ ...p, isMatch: true }));
       else if (e.type === 'liked' && e.userId === userId) update((p) => ({ ...p, liked: true, isMatch: p.isMatch || e.isMatch }));
+      else if ((e.type === 'requestSent' || e.type === 'requestDeclined') && e.userId === userId) load();
     });
     return () => {
       alive.current = false;
@@ -47,7 +48,8 @@ export function usePersonProfileViewModel(userId: string) {
     update((x) => ({ ...x, liked: true }));
     people.like(p).catch((e: unknown) => {
       update((x) => ({ ...x, liked: false }));
-      messenger.error((e as Error)?.message || `Couldn’t like ${firstName(p)}.`);
+      // Out of likes: the shell shows the Plus offer instead.
+      if (!isLikeLimit(e)) messenger.error((e as Error)?.message || `Couldn’t like ${firstName(p)}.`);
     });
   }, [update]);
 

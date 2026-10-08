@@ -1,12 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { OutlineButton } from '../../components/Buttons';
-import { OfflineBanner, SegmentedControl } from '../../components/Controls';
+import { InfoNote, OfflineBanner, SegmentedControl } from '../../components/Controls';
 import { Icon } from '../../components/Icon';
 import { useSegment } from '../../components/segment';
-import { Avatar, CoinIcon, EmptyState, PersonPhoto, SectionHeader, Shimmer, placeholderBrush } from '../../components/Visuals';
-import { firstName, initialOf, mainPhotoUrl, type Person, type Wallet } from '../../data/models';
-import { useApp } from '../../data/store';
+import { Avatar, EmptyState, PersonPhoto, SectionHeader, Shimmer, placeholderBrush } from '../../components/Visuals';
+import { firstName, initialOf, mainPhotoUrl, type Person } from '../../data/models';
 import { useAppActions } from '../../navigation/actions';
 import { Outfit, RelunColors, T } from '../../theme';
 import { formatShortAgo } from '../../util/format';
@@ -18,7 +17,6 @@ const ellipsis = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'elli
 export function MessagesTab({ showLikes }: { showLikes: number }) {
   const vm = useMessagesViewModel();
   const s = vm.state;
-  const wallet = useApp((st) => st.wallet);
   const actions = useAppActions();
   const { pathname } = useLocation();
 
@@ -61,7 +59,7 @@ export function MessagesTab({ showLikes }: { showLikes: number }) {
         )}
 
         {s.view === 'likes' ? (
-          <LikesYou s={s} wallet={wallet} />
+          <LikesYou s={s} />
         ) : s.load === 'loading' ? (
           [0, 1, 2, 3, 4].map((i) => <SkeletonRow key={i} />)
         ) : s.load === 'empty' ? (
@@ -83,6 +81,37 @@ export function MessagesTab({ showLikes }: { showLikes: number }) {
           />
         ) : (
           <>
+            {s.requests.length > 0 && (
+              <>
+                <SectionHeader text={`Message requests · ${s.requests.length}`} style={{ paddingLeft: 20, paddingBottom: 8 }} />
+                <div style={{ padding: '0 16px 4px' }}>
+                  <InfoNote
+                    icon="mark_chat_unread"
+                    text={
+                      <>
+                        {'These people haven’t matched with you. Reply to match, or decline. '}
+                        <button
+                          type="button"
+                          className="press-plain"
+                          onClick={actions.openSettings}
+                          style={{ ...T.bodySmall, lineHeight: '18px', fontWeight: 600, color: RelunColors.Ink, textDecoration: 'underline' }}
+                        >
+                          Turn off message requests
+                        </button>
+                      </>
+                    }
+                  />
+                </div>
+                {s.requests.map((row) => (
+                  <ConversationItem
+                    key={row.conversation.userId}
+                    row={row}
+                    onClick={() => row.person && actions.openChat(row.person)}
+                  />
+                ))}
+                <div style={{ height: 14 }} />
+              </>
+            )}
             {s.newMatches.length > 0 && (
               <>
                 <SectionHeader text="New matches" style={{ paddingLeft: 20, paddingBottom: 8 }} />
@@ -100,11 +129,7 @@ export function MessagesTab({ showLikes }: { showLikes: number }) {
                   <ConversationItem
                     key={row.conversation.userId}
                     row={row}
-                    onClick={() => {
-                      const person = row.person;
-                      if (!person) return;
-                      actions.openChat({ ...person, chatUnlocked: row.conversation.chatUnlocked || person.chatUnlocked });
-                    }}
+                    onClick={() => row.person && actions.openChat(row.person)}
                   />
                 ))}
               </>
@@ -146,6 +171,13 @@ function ConversationItem({ row, onClick }: { row: ConversationRow; onClick: () 
   const seg = useSegment();
   const c = row.conversation;
   const unread = c.unread > 0;
+  const tag = !c.request
+    ? null
+    : !c.request.outgoing
+      ? 'Request'
+      : c.request.status === 'declined'
+        ? 'Not accepted'
+        : 'Request sent';
   const title = [c.name, row.person?.age?.toString()].filter((v): v is string => v != null).join(', ');
   return (
     <button
@@ -179,6 +211,21 @@ function ConversationItem({ row, onClick }: { row: ConversationRow; onClick: () 
           <span style={{ ...T.bodySmall, fontSize: 12, color: RelunColors.Muted, flexShrink: 0 }}>{formatShortAgo(c.lastAt)}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {tag && (
+            <span
+              style={{
+                ...T.labelSmall,
+                fontSize: 11,
+                color: c.request?.status === 'declined' ? RelunColors.Muted : seg.text,
+                background: c.request?.status === 'declined' ? RelunColors.ChipFill : seg.tint,
+                borderRadius: 999,
+                padding: '2px 8px',
+                flexShrink: 0,
+              }}
+            >
+              {tag}
+            </span>
+          )}
           <span
             style={{
               ...T.bodySmall,
@@ -226,7 +273,7 @@ function SkeletonRow() {
   );
 }
 
-function LikesYou({ s, wallet }: { s: MessagesState; wallet: Wallet }) {
+function LikesYou({ s }: { s: MessagesState }) {
   const actions = useAppActions();
   const seg = useSegment();
   const tiles: (Person | null)[] = s.likesLocked ? Array.from({ length: Math.min(s.likesCount, 8) }, () => null) : s.likers;
@@ -253,7 +300,7 @@ function LikesYou({ s, wallet }: { s: MessagesState; wallet: Wallet }) {
             {s.likesCount === 1 ? '1 person already likes you' : `${s.likesCount} people already like you`}
           </span>
           <span style={{ ...T.bodySmall, fontSize: 14, color: RelunColors.Muted }}>
-            See who they are and match instantly. Includes Profile Views for 30 days.
+            See who they are and match instantly. Included with Relun Plus, or unlock with coins.
           </span>
           <button
             type="button"
@@ -269,9 +316,7 @@ function LikesYou({ s, wallet }: { s: MessagesState; wallet: Wallet }) {
               justifyContent: 'center',
             }}
           >
-            <span style={buttonText}>Unlock for </span>
-            <CoinIcon size={20} />
-            <span style={buttonText}>{` ${wallet.insightsCost} · 30 days`}</span>
+            <span style={buttonText}>See who likes you</span>
           </button>
         </div>
       )}

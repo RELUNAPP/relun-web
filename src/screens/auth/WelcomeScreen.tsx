@@ -1,8 +1,9 @@
-import { InkButton, LinkButton, OutlineButton } from '../../components/Buttons';
+// OutlineButton comes back with phone sign-in.
+import { InkButton /* , OutlineButton */ } from '../../components/Buttons';
 import { RingsMark } from '../../components/Visuals';
 import { Pacifico, RelunColors, T } from '../../theme';
 
-export function WelcomeScreen(props: { onPhone: () => void; onEmail: () => void; onSignIn: () => void }) {
+export function WelcomeScreen(props: { onPhone: () => void; onEmail: () => void }) {
   const strong = { color: RelunColors.Ink, fontWeight: 600 };
   return (
     <div style={{ position: 'absolute', inset: 0, background: '#FFFFFF', display: 'flex', flexDirection: 'column' }}>
@@ -25,9 +26,11 @@ export function WelcomeScreen(props: { onPhone: () => void; onEmail: () => void;
         <p style={{ ...T.bodyMedium, color: RelunColors.Muted, paddingBottom: 6 }}>
           Connect with people who share your relationship intentions.
         </p>
+        {/* Phone sign-in is off until SMS delivery (Termii DND sender) is sorted.
         <InkButton text="Continue with Phone" onClick={props.onPhone} leadingIcon="call" leadingIconOutline />
         <OutlineButton text="Continue with Email" onClick={props.onEmail} leadingIcon="mail" leadingIconOutline />
-        <LinkButton text="I already have an account" onClick={props.onSignIn} underline style={{ width: '100%' }} />
+        */}
+        <InkButton text="Continue with Email" onClick={props.onEmail} leadingIcon="mail" leadingIconOutline />
         <p style={{ ...T.bodySmall, fontSize: 12, color: RelunColors.Muted, textAlign: 'center', width: '100%' }}>
           By continuing you agree to our <span style={strong}>Terms of Service</span> and{' '}
           <span style={strong}>Privacy Policy</span>.

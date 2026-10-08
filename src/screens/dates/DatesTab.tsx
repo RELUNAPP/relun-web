@@ -6,6 +6,7 @@ import { LabeledField, RelunTextField } from '../../components/Inputs';
 import { useSegment } from '../../components/segment';
 import { Avatar, EmptyState, SegmentPill, Shimmer } from '../../components/Visuals';
 import { firstName, initialOf, mainPhotoUrl, type DatePost } from '../../data/models';
+import { useApp } from '../../data/store';
 import { useAppActions } from '../../navigation/actions';
 import { RelunColors, T } from '../../theme';
 import { formatAgo, formatWhen } from '../../util/format';
@@ -313,7 +314,7 @@ function MineCard({ post, vm }: { post: DatePost; vm: Vm }) {
             <button
               type="button"
               className="press"
-              onClick={() => actions.openChat({ ...r.person, isMatch: true, chatUnlocked: true })}
+              onClick={() => actions.openChat({ ...r.person, isMatch: true })}
               style={{
                 height: 40,
                 borderRadius: 999,
@@ -362,6 +363,12 @@ function CreateDateSheet({
   onDismiss: () => void;
 }) {
   const seg = useSegment();
+  const actions = useAppActions();
+  const wallet = useApp((st) => st.wallet);
+  // No free slot left: this post costs coins.
+  const paid = (wallet.dates.left ?? 1) <= 0;
+  const cost = wallet.datePostCost;
+  const short = paid && wallet.balance < cost;
   const [activity, setActivity] = useState('');
   const [place, setPlace] = useState('');
   const [date, setDate] = useState<string | null>(null);
@@ -478,10 +485,31 @@ function CreateDateSheet({
             textStyle={T.bodyMedium}
           />
         </LabeledField>
+        {paid && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', borderRadius: 14, background: RelunColors.WarningFill, padding: '12px 14px' }}>
+            <span style={{ ...T.bodySmall, lineHeight: '18px', color: RelunColors.WarningText }}>
+              {`You already have ${wallet.dates.limit === 1 ? 'a date' : `${wallet.dates.limit} dates`} live. Posting another costs ${cost} coins. You have ${wallet.balance}.`}
+            </span>
+            {(short || !wallet.plus) && (
+              <button
+                type="button"
+                className="press-plain"
+                onClick={() => {
+                  onDismiss();
+                  if (short) actions.openCoins();
+                  else actions.openPlus();
+                }}
+                style={{ ...T.bodySmall, fontWeight: 600, color: RelunColors.WarningText, textAlign: 'left', textDecoration: 'underline' }}
+              >
+                {short ? 'Get coins' : `Post up to ${wallet.plusPerks.activeDates} at once with Relun Plus`}
+              </button>
+            )}
+          </div>
+        )}
         <PrimaryButton
-          text="Post Request"
+          text={paid ? `Post for ${cost} coins` : 'Post Request'}
           onClick={() => at && onPost(activity, place, at, desc)}
-          enabled={valid}
+          enabled={valid && !short}
           loading={posting}
         />
       </RelunSheet>

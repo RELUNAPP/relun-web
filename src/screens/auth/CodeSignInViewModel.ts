@@ -36,21 +36,59 @@ const normalizedContact = (s: CodeSignInState): string =>
 
 export const sentTo = (s: CodeSignInState): string => (s.method === 'phone' ? `${s.countryCode} ${s.contact}` : s.contact.trim());
 
+const RESEND_SECONDS = 45;
+/** Matches the backend's OTP lifetime; a saved "code sent" step is useless after it. */
+const CODE_LIFETIME_MS = 10 * 60 * 1000;
+
+/*
+ * Progress is kept in sessionStorage because phones often discard a background
+ * tab and reload it, and leaving to fetch the code from email is exactly when
+ * that happens. sessionStorage survives the reload but stays with this tab.
+ */
+const SAVED_KEY = 'relun.codeSignIn';
+
+type Saved = { method: ContactMethod; countryCode: string; contact: string; step: 1 | 2; sentAt: number };
+
+const readSaved = (method: ContactMethod): Saved | null => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SAVED_KEY) ?? 'null') as Saved | null;
+    if (!saved || saved.method !== method) return null;
+    if (saved.step === 2 && Date.now() - saved.sentAt > CODE_LIFETIME_MS) return { ...saved, step: 1 };
+    return saved;
+  } catch {
+    return null;
+  }
+};
+
+const writeSaved = (saved: Saved | null) => {
+  try {
+    if (saved) sessionStorage.setItem(SAVED_KEY, JSON.stringify(saved));
+    else sessionStorage.removeItem(SAVED_KEY);
+  } catch {
+    // Storage blocked: a reload just starts over, as before.
+  }
+};
+
+const resendLeft = (sentAt: number) => Math.max(0, RESEND_SECONDS - Math.floor((Date.now() - sentAt) / 1000));
+
 /** Port of Android CodeSignInViewModel. */
 export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
+  const method: ContactMethod = initialMethod === 'email' ? 'email' : 'phone';
+  const [initial] = useState(() => readSaved(method));
   const [state, setStateRaw] = useState<CodeSignInState>(() => ({
-    method: initialMethod === 'email' ? 'email' : 'phone',
-    countryCode: COUNTRY_CODES[0],
-    contact: '',
-    step: 1,
+    method,
+    countryCode: initial?.countryCode ?? COUNTRY_CODES[0],
+    contact: initial?.contact ?? '',
+    step: initial?.step ?? 1,
     code: '',
     codeError: null,
     sendError: null,
     busy: false,
-    resendIn: 0,
+    resendIn: initial?.step === 2 ? resendLeft(initial.sentAt) : 0,
   }));
   // Mirror of the latest state so actions read it synchronously, like StateFlow.value.
   const ref = useRef(state);
+  const sentAt = useRef(initial?.sentAt ?? 0);
   const alive = useRef(true);
   const countdown = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -58,6 +96,8 @@ export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
     if (!alive.current) return;
     ref.current = fn(ref.current);
     setStateRaw(ref.current);
+    const s = ref.current;
+    writeSaved({ method: s.method, countryCode: s.countryCode, contact: s.contact, step: s.step, sentAt: sentAt.current });
   };
 
   const stopCountdown = () => {
@@ -67,15 +107,17 @@ export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
 
   useEffect(() => {
     alive.current = true;
+    // Back from a reload mid-countdown: carry on from where it was.
+    if (ref.current.step === 2 && ref.current.resendIn > 0) startCountdown(ref.current.resendIn);
     return () => {
       alive.current = false;
       stopCountdown();
     };
   }, []);
 
-  const startCountdown = () => {
+  const startCountdown = (seconds = RESEND_SECONDS) => {
     stopCountdown();
-    update((s) => ({ ...s, resendIn: 45 }));
+    update((s) => ({ ...s, resendIn: seconds }));
     countdown.current = setInterval(() => {
       if (ref.current.resendIn <= 0) {
         stopCountdown();
@@ -92,6 +134,7 @@ export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
     update((x) => ({ ...x, busy: true }));
     try {
       const outcome = await auth.verifyCode(s.method, normalizedContact(s), s.code);
+      writeSaved(null);
       if (outcome.needsProfile) auth.enterOnboarding('segment');
       else if (outcome.needsPhotos) auth.enterOnboarding('photos');
       else auth.finishOnboarding();
@@ -123,6 +166,7 @@ export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
       update((x) => ({ ...x, busy: true, sendError: null }));
       try {
         await auth.requestCode(s.method, normalizedContact(s));
+        sentAt.current = Date.now();
         update((x) => ({ ...x, busy: false, step: 2, code: '', codeError: null }));
         startCountdown();
       } catch (e) {
@@ -134,6 +178,7 @@ export function useCodeSignInViewModel(initialMethod: 'phone' | 'email') {
       update((x) => ({ ...x, code: '', codeError: null }));
       try {
         await auth.requestCode(s.method, normalizedContact(s));
+        sentAt.current = Date.now();
         messenger.info('New code sent');
         if (alive.current) startCountdown();
       } catch (e) {

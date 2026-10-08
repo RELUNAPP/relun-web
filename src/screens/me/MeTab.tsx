@@ -216,6 +216,38 @@ export function MeTab() {
           />
         </div>
 
+        {/* Relun Plus */}
+        <div style={{ padding: '0 16px 16px' }}>
+          <button
+            type="button"
+            className="press"
+            onClick={actions.openPlus}
+            style={{
+              width: '100%',
+              borderRadius: 24,
+              background: wallet.plus ? seg.tint : seg.fill,
+              padding: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              textAlign: 'left',
+            }}
+          >
+            <Icon name="workspace_premium" size={30} color={wallet.plus ? seg.text : seg.onFill} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ ...T.titleSmall, color: wallet.plus ? RelunColors.Ink : seg.onFill }}>
+                {wallet.plus ? `Relun Plus · ${wallet.plus.plan === 'weekly' ? 'Weekly' : 'Monthly'}` : 'Get Relun Plus'}
+              </span>
+              <span style={{ ...T.bodySmall, color: wallet.plus ? RelunColors.Body : seg.onFill }}>
+                {wallet.plus
+                  ? `${wallet.plus.autoRenew ? 'Renews' : 'Ends'} ${wallet.plus.until.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+                  : 'Unlimited likes, see who likes you, free message requests'}
+              </span>
+            </div>
+            <Icon name="chevron_right" size={22} color={wallet.plus ? seg.text : seg.onFill} />
+          </button>
+        </div>
+
         {/* Insights */}
         <div style={{ padding: '0 16px 16px' }}>
           <div
@@ -247,7 +279,7 @@ export function MeTab() {
             </div>
             {!wallet.insightsActive ? (
               <PrimaryButton
-                text={`Unlock Likes & Views · ${wallet.insightsCost} coins/month`}
+                text="Unlock Likes & Views"
                 onClick={actions.openInsights}
                 leadingIcon="lock_open"
                 height={48}

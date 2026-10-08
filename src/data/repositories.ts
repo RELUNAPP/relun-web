@@ -5,6 +5,8 @@ import {
   parseDate,
   segmentFrom,
   toDatePost,
+  toEntitlements,
+  toMessageRequest,
   toPerson,
   type ChatMessage,
   type Conversation,
@@ -111,6 +113,7 @@ function setSignedIn() {
   void profile.refresh().catch(() => {});
   void settings.refresh().catch(() => {});
   chat.refreshUnread();
+  inbox.refreshUnread();
 }
 
 // A refreshed access token means the socket's handshake token is stale.
@@ -131,6 +134,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     chatSocket.connect();
     chat.refreshUnread();
+    inbox.refreshUnread();
     void coins.refresh().catch(() => {});
   } else {
     chatSocket.pause();
@@ -230,22 +234,45 @@ export type PeopleEvent =
   | { type: 'passed'; userId: string }
   | { type: 'blocked'; userId: string }
   | { type: 'unblocked'; userId: string }
-  | { type: 'chatUnlocked'; userId: string }
+  /** Became a match some other way than a like on screen (a reply, a request). */
+  | { type: 'matched'; userId: string }
+  | { type: 'requestSent'; userId: string }
+  | { type: 'requestDeclined'; userId: string }
   | { type: 'insightsUnlocked' }
+  | { type: 'plusChanged' }
   | { type: 'matchesChanged' };
+
+/** A like refused because today's free likes are used up. */
+export const isLikeLimit = (e: unknown): boolean => e instanceof ApiException && e.code === 'LIKE_LIMIT';
 
 export const people = {
   /** Emits when a like is mutual; the shell shows the match celebration. */
   newMatches: new Emitter<Person>(),
   events: new Emitter<PeopleEvent>(),
+  /** Emits when a like hits the daily limit; the shell offers Plus. */
+  likeLimitReached: new Emitter<void>(),
 
   discover: async (latitude: number | null, longitude: number | null) =>
     ((await api.discover(latitude, longitude)).users ?? []).map(toPerson),
   person: async (userId: string) => toPerson(await api.person(userId)),
 
-  /** Likes [person]. Returns true when it made a match. */
+  /** Likes [person]. Returns true when it made a match. Throws isLikeLimit errors when out of likes. */
   async like(person: Person): Promise<boolean> {
-    const res = await api.like(person.id);
+    let res: D.LikeResponse;
+    try {
+      res = await api.like(person.id);
+    } catch (e) {
+      if (isLikeLimit(e)) {
+        const wallet = getApp().wallet;
+        setApp({ wallet: { ...wallet, likes: { ...wallet.likes, left: 0 } } });
+        people.likeLimitReached.emit();
+      }
+      throw e;
+    }
+    if (res.likesLeft !== undefined) {
+      const wallet = getApp().wallet;
+      setApp({ wallet: { ...wallet, likes: { ...wallet.likes, left: res.likesLeft, resetAt: parseDate(res.likesResetAt) } } });
+    }
     const mutual = res.isMutual ?? false;
     if (mutual && !res.alreadyLiked) people.newMatches.emit({ ...person, isMatch: true, liked: true });
     people.events.emit({ type: 'liked', userId: person.id, isMatch: mutual });
@@ -307,7 +334,7 @@ export const chat = {
           lastFromMe: conv.lastMessage.senderId === myId(),
           lastAt: parseDate(conv.lastMessage.createdAt) ?? new Date(),
           unread: conv.unreadCount ?? 0,
-          chatUnlocked: conv.chatUnlocked ?? true,
+          request: toMessageRequest(conv.request),
         },
       ];
     });
@@ -317,8 +344,37 @@ export const chat = {
   refreshUnread() {
     void chat.conversations().catch(() => {});
   },
-  history: async (userId: string) => ((await api.messages(userId)).messages ?? []).map((m) => toChatMessage(m)),
+  /** The conversation's messages, and the message request it runs on, if any. */
+  async thread(userId: string) {
+    const res = await api.messages(userId);
+    return { messages: (res.messages ?? []).map((m) => toChatMessage(m)), request: toMessageRequest(res.request) };
+  },
   toChatMessage,
+
+  /**
+   * Messages [person] without a match, using a free request if one is left,
+   * otherwise coins. If they already liked the user it becomes a match instead,
+   * for free.
+   */
+  async sendRequest(person: Person, content: string) {
+    const res = await api.sendMessageRequest(person.id, content.trim());
+    setApp({ wallet: { ...getApp().wallet, balance: res.balance ?? getApp().wallet.balance } });
+    // The free allowance changed; the server has the count.
+    void coins.refresh().catch(() => {});
+    const matched = res.matched ?? false;
+    if (matched) {
+      people.emit({ type: 'liked', userId: person.id, isMatch: true });
+      people.emit({ type: 'matched', userId: person.id });
+    } else {
+      people.emit({ type: 'requestSent', userId: person.id });
+    }
+    return { matched, charged: res.charged ?? 0, free: res.freeAllowance ?? null };
+  },
+  async declineRequest(userId: string) {
+    await api.declineMessageRequest(userId);
+    people.emit({ type: 'requestDeclined', userId });
+    chat.refreshUnread();
+  },
 };
 
 chatSocket.events.on((event) => {
@@ -338,10 +394,13 @@ export const coins = {
       wallet: {
         balance: res.balance ?? 0,
         insightsActive: res.insightsActive ?? false,
-        chatUnlockCost: res.costs?.chatUnlock ?? 15,
-        insightsCost: res.costs?.insights ?? 20,
+        messageRequestCost: res.costs?.messageRequest ?? 200,
+        insights7Cost: res.costs?.insights7 ?? 700,
+        insights30Cost: res.costs?.insights30 ?? 1500,
+        datePostCost: res.costs?.datePost ?? 100,
         packages: res.packages ?? [],
         pendingBonus: res.pendingBonus ?? null,
+        ...toEntitlements(res),
       },
     });
   },
@@ -350,13 +409,9 @@ export const coins = {
     updateWallet({ pendingBonus: null });
     await api.markBonusSeen(id).catch(() => {});
   },
-  async unlockChat(userId: string) {
-    const res = await api.unlockChat(userId);
-    updateWallet({ balance: res.balance ?? 0 });
-    return { unlocked: res.unlocked ?? false, charged: res.charged ?? 0, balance: res.balance ?? 0 };
-  },
-  async buyInsights() {
-    const res = await api.buyInsights();
+  /** Likes & Views for coins, for 7 or 30 days. */
+  async buyInsights(days: 7 | 30) {
+    const res = await api.buyInsights(days);
     updateWallet({ balance: res.balance ?? 0, insightsActive: true });
   },
   /** Hands a Paystack reference to the server, which verifies it and credits coins. */
@@ -367,23 +422,73 @@ export const coins = {
   },
 };
 
+// ---------- Notifications ----------
+
+/** The notification list behind the bell. Chat messages have their own badge. */
+export const inbox = {
+  async list() {
+    const res = await api.notifications();
+    setApp({ notificationsUnread: res.unreadCount ?? 0 });
+    return (res.notifications ?? []).map((n) => ({ ...n, createdAt: parseDate(n.createdAt) ?? new Date() }));
+  },
+  refreshUnread() {
+    api
+      .notificationsUnread()
+      .then((res) => setApp({ notificationsUnread: res.unreadCount ?? 0 }))
+      .catch(() => {});
+  },
+  /** Opening the list reads everything. */
+  async markAllRead() {
+    setApp({ notificationsUnread: 0 });
+    await api.markNotificationsRead().catch(() => {});
+  },
+};
+
+chatSocket.events.on((event) => {
+  if (event.type === 'notification') setApp({ notificationsUnread: event.unreadCount });
+});
+
+// ---------- Relun Plus ----------
+
+/** Relun Plus on the web: Paystack plans and one-time passes. */
+export const plus = {
+  /** Hands a Paystack reference to the server, which verifies it and starts or extends Plus. */
+  async confirmPaystack(reference: string) {
+    updateWallet(toEntitlements(await api.plusVerify(reference)));
+    // Plus includes Likes & Views; the wallet says so.
+    await coins.refresh().catch(() => {});
+    people.emit({ type: 'plusChanged' });
+  },
+  /** Stops a renewing plan; Plus lasts until the paid period ends. */
+  async cancel() {
+    updateWallet(toEntitlements(await api.plusCancel()));
+    people.emit({ type: 'plusChanged' });
+  },
+};
+
 // ---------- Dates, safety, settings ----------
 
 export const dates = {
   browse: async () => ((await api.browseDates()).dates ?? []).map(toDatePost),
   mine: async () => ((await api.myDates()).dates ?? []).map(toDatePost),
-  create: async (activity: string, place: string, at: Date, description: string | null) =>
-    toDatePost(
-      (
-        await api.createDate({
-          activity: activity.trim(),
-          place: place.trim(),
-          scheduledFor: at.toISOString(),
-          description: description?.trim() || undefined,
-        })
-      ).date,
-    ),
-  delete: (dateId: string) => api.deleteDate(dateId),
+  /** Posts a date: free while a free slot is left, otherwise it costs coins. */
+  async create(activity: string, place: string, at: Date, description: string | null) {
+    const res = await api.createDate({
+      activity: activity.trim(),
+      place: place.trim(),
+      scheduledFor: at.toISOString(),
+      description: description?.trim() || undefined,
+    });
+    if (res.balance !== undefined) setApp({ wallet: { ...getApp().wallet, balance: res.balance } });
+    // A free slot was used, or coins spent; the server has the counts.
+    void coins.refresh().catch(() => {});
+    return { post: toDatePost(res.date), charged: res.charged ?? 0 };
+  },
+  async delete(dateId: string) {
+    await api.deleteDate(dateId);
+    // Frees one of the free active slots.
+    void coins.refresh().catch(() => {});
+  },
   join: (dateId: string) => api.requestToJoin(dateId),
   respond: (dateId: string, requestId: string, accept: boolean) =>
     api.respondToRequest(dateId, requestId, accept ? 'accepted' : 'declined'),

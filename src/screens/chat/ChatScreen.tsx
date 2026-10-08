@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { BackButton, CircleIconButton } from '../../components/Buttons';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { BackButton, CircleIconButton, OutlineButton } from '../../components/Buttons';
 import { Icon, Spinner } from '../../components/Icon';
 import { useSegment } from '../../components/segment';
-import { Avatar, CoinIcon } from '../../components/Visuals';
-import { mainPhotoUrl, type ChatMessage } from '../../data/models';
+import { Avatar } from '../../components/Visuals';
+import { firstName, mainPhotoUrl, type ChatMessage, type MessageRequest } from '../../data/models';
 import { useAppActions } from '../../navigation/actions';
 import { Outfit, RelunColors, T } from '../../theme';
 import { formatClock, formatDay } from '../../util/format';
@@ -64,7 +64,6 @@ export function ChatScreen({ userId, initialName }: { userId: string; initialNam
   const status = s.otherTyping ? 'typing…' : s.otherOnline ? 'Online' : 'Offline';
   const person = s.person;
   const canSend = /\S/.test(s.draft);
-  const bigText: CSSProperties = { ...T.labelLarge, fontSize: 16, color: seg.onFill, whiteSpace: 'pre' };
 
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: RelunColors.Background }}>
@@ -152,7 +151,7 @@ export function ChatScreen({ userId, initialName }: { userId: string; initialNam
             <div style={{ width: '100%', padding: 40, display: 'flex', justifyContent: 'center' }}>
               <Spinner size={40} stroke={4} color={seg.fill} />
             </div>
-          ) : s.messages.length === 0 && !vm.locked ? (
+          ) : s.messages.length === 0 ? (
             <EmptyChat s={s} onOpener={(line) => vm.send(line)} />
           ) : null}
 
@@ -173,28 +172,44 @@ export function ChatScreen({ userId, initialName }: { userId: string; initialNam
         </div>
       </div>
 
-      {/* Composer, or the unlock prompt when the chat isn't paid for yet. */}
+      {/* Composer, or why a message request's sender can't write right now. */}
       <div className="nav-pad" style={{ background: '#FFFFFF', flexShrink: 0 }}>
+        {s.request && !s.loading && (
+          <RequestPanel
+            request={s.request}
+            name={firstName({ name })}
+            declining={s.declining}
+            onDecline={() => {
+              void vm.decline().then((done) => {
+                if (done) actions.back();
+              });
+            }}
+            onSettings={actions.openSettings}
+          />
+        )}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, padding: '10px 12px' }}>
-          {vm.locked && person ? (
-            <button
-              type="button"
-              className="press"
-              onClick={() => actions.openChat(person)}
+          {vm.blocked ? (
+            <div
+              role="status"
               style={{
                 flex: 1,
                 minHeight: 50,
                 borderRadius: 16,
-                background: seg.fill,
+                background: RelunColors.ChipFill,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 8,
+                padding: '0 14px',
               }}
             >
-              <span style={bigText}>Unlock chat · </span>
-              <CoinIcon size={20} />
-              <span style={bigText}> 15</span>
-            </button>
+              <Icon name={vm.blocked === 'declined' ? 'block' : 'schedule'} size={18} color={RelunColors.Body} />
+              <span style={{ ...T.bodyMedium, fontWeight: 500, color: RelunColors.Body, textAlign: 'center' }}>
+                {vm.blocked === 'declined'
+                  ? `${firstName({ name })} declined your message request`
+                  : `Waiting for ${firstName({ name })} to reply`}
+              </span>
+            </div>
           ) : (
             <>
               <Composer value={s.draft} onChange={vm.setDraft} onSend={() => vm.send()} />
@@ -220,6 +235,76 @@ export function ChatScreen({ userId, initialName }: { userId: string; initialNam
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The message request strip above the composer. The receiver gets the choice
+ * (reply to match, or decline) and a pointer to the setting that turns these
+ * off; the sender sees how many messages they have left.
+ */
+function RequestPanel(props: {
+  request: MessageRequest;
+  name: string;
+  declining: boolean;
+  onDecline: () => void;
+  onSettings: () => void;
+}) {
+  const { request, name } = props;
+  const seg = useSegment();
+
+  if (request.outgoing) {
+    if (request.status !== 'pending' || request.remaining <= 0) return null;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 16px 0' }}>
+        <Icon name="mark_chat_unread" outline size={16} color={RelunColors.Muted} />
+        <span style={{ ...T.bodySmall, color: RelunColors.Muted }}>
+          {`Message request · ${request.remaining} ${request.remaining === 1 ? 'message' : 'messages'} left until ${name} replies`}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '12px 12px 0' }}>
+      <div
+        style={{
+          borderRadius: 20,
+          background: seg.tint,
+          padding: 14,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <Icon name="mark_chat_unread" size={20} color={seg.text} style={{ marginTop: 1 }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <span style={{ ...T.titleSmall, color: RelunColors.Ink }}>{`${name} sent you a message request`}</span>
+            <span style={{ ...T.bodySmall, color: RelunColors.Body }}>
+              {`You haven’t matched. Reply to match and keep chatting, or decline and ${name} can’t message you again.`}
+            </span>
+          </div>
+        </div>
+        <OutlineButton
+          text={props.declining ? 'Declining…' : 'Decline'}
+          onClick={props.onDecline}
+          height={42}
+          leadingIcon="block"
+        />
+        <span style={{ ...T.bodySmall, fontSize: 12, color: RelunColors.Muted }}>
+          {'Don’t want messages from people you haven’t matched with? '}
+          <button
+            type="button"
+            className="press-plain"
+            onClick={props.onSettings}
+            style={{ ...T.bodySmall, fontSize: 12, fontWeight: 600, color: RelunColors.Ink, textDecoration: 'underline' }}
+          >
+            Turn off message requests
+          </button>
+        </span>
       </div>
     </div>
   );

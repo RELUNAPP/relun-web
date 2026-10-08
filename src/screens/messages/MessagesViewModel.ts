@@ -22,6 +22,8 @@ export type MessagesState = {
   offline: boolean;
   newMatches: Person[];
   conversations: ConversationRow[];
+  /** Incoming message requests: people who paid to message the user without a match. */
+  requests: ConversationRow[];
   likesLocked: boolean;
   likesCount: number;
   likers: Person[];
@@ -33,6 +35,7 @@ const initialState: MessagesState = {
   offline: false,
   newMatches: [],
   conversations: [],
+  requests: [],
   likesLocked: true,
   likesCount: 0,
   likers: [],
@@ -82,14 +85,36 @@ async function loadNow(quiet: boolean) {
   }
   const list = matches.value;
   const byId = new Map(list.map((p) => [p.id, p]));
-  const convs = conversations.value.filter((c) => byId.has(c.userId));
+  const convs = conversations.value.filter((c) => byId.has(c.userId) && !c.request);
   const talking = new Set(convs.map((c) => c.userId));
   const l = likes.status === 'fulfilled' ? likes.value : null;
+
+  // Request conversations are with people who aren't matches, so their cards
+  // come from the profile endpoint. Ones already on screen are reused.
+  const requestConvs = conversations.value.filter((c) => c.request != null && !byId.has(c.userId));
+  const current = useMessagesStore.getState();
+  const known = new Map(
+    [...current.conversations, ...current.requests].flatMap((r) => (r.person ? [[r.person.id, r.person] as const] : [])),
+  );
+  const requestPeople = await Promise.all(
+    requestConvs.map((c) => known.get(c.userId) ?? people.person(c.userId).catch(() => null)),
+  );
+  if (!started) return;
+  const requestRows: ConversationRow[] = requestConvs.map((c, i) => {
+    const p = requestPeople[i];
+    return { conversation: c, person: p ? { ...p, messageRequest: c.request } : null };
+  });
+  const sent = requestRows.filter((r) => r.conversation.request?.outgoing);
+  const rows = [...convs.map((conv) => ({ conversation: conv, person: byId.get(conv.userId) ?? null })), ...sent].sort(
+    (a, b) => b.conversation.lastAt.getTime() - a.conversation.lastAt.getTime(),
+  );
+
   update((s) => ({
-    load: list.length === 0 ? 'empty' : 'ready',
+    load: list.length === 0 && requestRows.length === 0 ? 'empty' : 'ready',
     offline: false,
     newMatches: list.filter((p) => !talking.has(p.id)),
-    conversations: convs.map((conv) => ({ conversation: conv, person: byId.get(conv.userId) ?? null })),
+    conversations: rows,
+    requests: requestRows.filter((r) => !r.conversation.request?.outgoing),
     likesLocked: l?.locked ?? s.likesLocked,
     likesCount: l?.count ?? s.likesCount,
     likers: l?.people ?? s.likers,

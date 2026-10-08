@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import type { Person } from '../../data/models';
 import { firstName } from '../../data/models';
 import { ApiException } from '../../data/network';
-import { people, settings } from '../../data/repositories';
+import { isLikeLimit, people, settings } from '../../data/repositories';
 import { getApp, messenger, useApp } from '../../data/store';
 import { location } from '../../util/location';
 import type { LoadState } from '../main/TabCommon';
@@ -81,6 +81,10 @@ function start() {
         case 'unliked':
           setLiked(event.userId, false);
           break;
+        // Sending a message request likes them too.
+        case 'requestSent':
+          setLiked(event.userId, true);
+          break;
         default:
           break;
       }
@@ -129,7 +133,8 @@ function like(person: Person) {
   setLiked(person.id, true);
   people.like(person).catch((e: unknown) => {
     setLiked(person.id, false);
-    messenger.error((e as Error)?.message || `Couldn’t like ${firstName(person)}.`);
+    // Out of likes: the shell shows the Plus offer instead.
+    if (!isLikeLimit(e)) messenger.error((e as Error)?.message || `Couldn’t like ${firstName(person)}.`);
   });
 }
 

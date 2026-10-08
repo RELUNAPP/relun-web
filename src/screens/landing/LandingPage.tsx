@@ -96,7 +96,7 @@ export function LandingPage({ onContinue }: { onContinue: () => void }) {
               Like someone, and if they like you back, it's a match.
             </Step>
             <Step n={4} icon="chat_bubble" title="Chat and meet up">
-              Open a chat with your match, or post a date plan and let people ask to join.
+              Chat with your matches for free, or post a date plan and let people ask to join.
             </Step>
           </ol>
         </div>
@@ -106,14 +106,14 @@ export function LandingPage({ onContinue }: { onContinue: () => void }) {
         <div className="lp-wrap">
           <h2>Made for real connections</h2>
           <div className="lp-grid lp-grid-2 lp-features">
-            <Feature icon="lock" title="Only matches can message you">
-              No inbox full of strangers. A chat opens only after you both like each other.
+            <Feature icon="lock" title="You choose who can message you">
+              Matches chat for free. Anyone else has to send a message request, and you can turn those off any time.
             </Feature>
             <Feature icon="event" title="Date plans">
               Post a plan, say dinner on Friday, and pick from the people who ask to join.
             </Feature>
-            <Feature icon="coin" title="Coins open chats">
-              Use coins to unlock a conversation with a match. New accounts start with free coins.
+            <Feature icon="workspace_premium" title="Relun Plus">
+              Unlimited likes, see who likes you, and free message requests. Weekly or monthly.
             </Feature>
             <Feature icon="shield" title="You're in control">
               Block or report anyone, any time, right from their profile.
@@ -177,7 +177,7 @@ function InstallButton({ mode, onClick, variant }: { mode: InstallMode; onClick:
       aria-disabled={done}
     >
       <Icon name={done ? 'check_circle' : 'install_mobile'} size={20} />
-      {done ? 'Installed on this device' : 'Install the app'}
+      {done ? 'Installed on this device' : 'Install the web app'}
     </button>
   );
 }
@@ -198,7 +198,9 @@ function Step({ n, icon, title, children }: { n: number; icon: string; title: st
 function Feature({ icon, title, children }: { icon: string; title: string; children: ReactNode }) {
   return (
     <div className="lp-feature">
-      <div className="lp-feature-icon">{icon === 'coin' ? <CoinIcon size={24} /> : <Icon name={icon} size={24} />}</div>
+      <div className="lp-feature-icon">
+        <Icon name={icon} size={24} />
+      </div>
       <div>
         <h3>{title}</h3>
         <p>{children}</p>
@@ -217,7 +219,7 @@ function PhoneMock() {
           <span style={{ fontFamily: Pacifico }}>relun</span>
           <span className="lp-phone-coins">
             <CoinIcon size={16} />
-            500
+            300
           </span>
         </div>
         <div className="lp-phone-card">
@@ -289,7 +291,7 @@ function InstallSheet({ mode, onDismiss }: { mode: InstallMode; onDismiss: () =>
     title = 'Install Relun on your phone';
     steps = [
       { icon: 'smartphone', text: <>Open <b>{window.location.host}</b> in your phone's browser.</> },
-      { icon: 'install_mobile', text: <>Tap <b>Install the app</b> on this page.</> },
+      { icon: 'install_mobile', text: <>Tap <b>Install the web app</b> on this page.</> },
     ];
     note = "On a computer, look for the install icon in your browser's address bar.";
   }

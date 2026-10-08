@@ -3,7 +3,6 @@ import { BackButton, OutlineButton, PrimaryButton } from '../../components/Butto
 import { EmptyState, PersonPhoto, Shimmer } from '../../components/Visuals';
 import { firstName, initialOf, mainPhotoUrl } from '../../data/models';
 import { people, type LockedPeople } from '../../data/repositories';
-import { useApp } from '../../data/store';
 import { useAppActions } from '../../navigation/actions';
 import { RelunColors, T } from '../../theme';
 import { formatAgo } from '../../util/format';
@@ -18,7 +17,6 @@ const grid = {
 /** Who viewed my profile, newest first. Opened from the Views card on the Me tab. */
 export function ProfileViewsScreen() {
   const actions = useAppActions();
-  const wallet = useApp((s) => s.wallet);
   const [views, setViews] = useState<LockedPeople | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -91,7 +89,7 @@ export function ProfileViewsScreen() {
             }
             action={
               <PrimaryButton
-                text={`Unlock for ${wallet.insightsCost} coins`}
+                text="See who viewed you"
                 onClick={actions.openInsights}
                 style={{ maxWidth: 240 }}
                 height={48}

@@ -1,15 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { BackButton, InkButton, LinkButton } from '../../components/Buttons';
-import { SegmentedControl } from '../../components/Controls';
+// import { SegmentedControl } from '../../components/Controls';
 import { Icon } from '../../components/Icon';
 import { ErrorLine, RelunTextField } from '../../components/Inputs';
-import type { ContactMethod } from '../../data/repositories';
+// import type { ContactMethod } from '../../data/repositories';
 import { Outfit, RelunColors, T } from '../../theme';
 import { contactError, contactValid, sentTo, useCodeSignInViewModel, type CodeSignInState } from './CodeSignInViewModel';
 
 type VM = ReturnType<typeof useCodeSignInViewModel>;
 
-export function CodeSignInScreen(props: { initialMethod: 'phone' | 'email'; returning: boolean; onBack: () => void }) {
+export function CodeSignInScreen(props: { initialMethod: 'phone' | 'email'; onBack: () => void }) {
   const vm = useCodeSignInViewModel(props.initialMethod);
   const s = vm.state;
   const back = () => (s.step === 2 ? vm.changeContact() : props.onBack());
@@ -31,26 +31,24 @@ export function CodeSignInScreen(props: { initialMethod: 'phone' | 'email'; retu
       >
         <BackButton onClick={back} />
         <div style={{ height: 24, flexShrink: 0 }} />
-        {s.step === 1 ? <ContactStep s={s} returning={props.returning} vm={vm} /> : <CodeStep s={s} vm={vm} />}
+        {s.step === 1 ? <ContactStep s={s} vm={vm} /> : <CodeStep s={s} vm={vm} />}
       </div>
     </div>
   );
 }
 
-function ContactStep({ s, returning, vm }: { s: CodeSignInState; returning: boolean; vm: VM }) {
+function ContactStep({ s, vm }: { s: CodeSignInState; vm: VM }) {
   // Each method's field is keyed, so switching remounts it and autoFocus refocuses (LaunchedEffect(s.method)).
   const error = contactError(s) ?? s.sendError;
 
   return (
     <>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {returning && (
-          <span style={{ ...T.labelMedium, fontSize: 13, letterSpacing: '0.5px', color: RelunColors.Muted }}>WELCOME BACK</span>
-        )}
         <h1 style={{ ...T.headlineLarge, color: RelunColors.Ink }}>
           {s.method === 'phone' ? 'What’s your number?' : 'What’s your email?'}
         </h1>
         <p style={{ ...T.bodyMedium, color: RelunColors.Muted }}>We’ll send you a 6-digit code. No password, ever.</p>
+        {/* Phone sign-in is off for now; restore this toggle with it.
         <SegmentedControl<ContactMethod>
           options={[
             ['phone', 'Phone'],
@@ -59,6 +57,7 @@ function ContactStep({ s, returning, vm }: { s: CodeSignInState; returning: bool
           selected={s.method}
           onSelect={vm.setMethod}
         />
+        */}
         {s.method === 'phone' ? (
           <div style={{ display: 'flex', gap: 8 }}>
             <button

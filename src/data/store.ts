@@ -39,6 +39,8 @@ type AppStore = {
   me: MyProfile | null;
   settings: SettingsDto;
   unreadTotal: number;
+  /** Unread notifications; the bell's badge. */
+  notificationsUnread: number;
   toast: Toast | null;
   socketConnected: boolean;
 };
@@ -50,6 +52,7 @@ export const useApp = create<AppStore>(() => ({
   me: null,
   settings: defaultSettings,
   unreadTotal: 0,
+  notificationsUnread: 0,
   toast: null,
   socketConnected: false,
 }));

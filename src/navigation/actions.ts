@@ -10,6 +10,10 @@ export type AppActions = {
   openChat: (person: Person) => void;
   openCoins: () => void;
   openInsights: () => void;
+  /** Relun Plus: plans, or the user's own status. */
+  openPlus: () => void;
+  /** The list behind the bell. */
+  openNotifications: () => void;
   /** Messages tab, "Likes You". */
   openLikes: () => void;
   openMore: (person: Person) => void;
@@ -30,6 +34,8 @@ export function useAppActions(): AppActions {
       openChat: (person) => void shell.openChat(person),
       openCoins: () => shell.openCoins(),
       openInsights: shell.openInsights,
+      openPlus: shell.openPlus,
+      openNotifications: () => navigate('/notifications'),
       openLikes: shell.showLikes,
       openMore: shell.openMore,
       openSettings: () => navigate('/settings'),

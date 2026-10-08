@@ -140,6 +140,17 @@ export function SettingsScreen() {
                   patch({ showDistance: !settings.showDistance }, { ...settings, showDistance: !settings.showDistance })
                 }
               />
+              <ToggleRow
+                title="Message requests"
+                checked={settings.allowMessageRequests}
+                subtitle="Let people you haven’t matched with pay to message you"
+                onToggle={() =>
+                  patch(
+                    { allowMessageRequests: !settings.allowMessageRequests },
+                    { ...settings, allowMessageRequests: !settings.allowMessageRequests },
+                  )
+                }
+              />
               <ListRow
                 title="Blocked users"
                 onClick={actions.openBlocked}
@@ -169,6 +180,7 @@ export function SettingsScreen() {
               />
             </Section>
             <Section title="Account">
+              <ListRow title="Relun Plus" onClick={actions.openPlus} value={wallet.plus ? 'Active' : 'Get Plus'} />
               <ListRow title="Coins & purchases" onClick={actions.openCoins} value={formatCoins(wallet.balance)} />
               <ListRow title="Help" onClick={() => messenger.info('Coming soon')} />
               <ListRow title="Terms of Service" onClick={() => messenger.info('Coming soon')} />

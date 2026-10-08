@@ -123,9 +123,9 @@ export function useDatesViewModel() {
     const post = async (activity: string, place: string, at: Date, description: string | null) => {
       update((s) => ({ ...s, posting: true }));
       try {
-        const created = await dates.create(activity, place, at, description);
+        const { post: created, charged } = await dates.create(activity, place, at, description);
         update((s) => ({ ...s, posting: false, creating: false, view: 'mine', mine: [created, ...s.mine] }));
-        messenger.success('Your date is live');
+        messenger.success(charged > 0 ? `Your date is live · −${charged} coins` : 'Your date is live');
       } catch (e) {
         update((s) => ({ ...s, posting: false }));
         messenger.error(errorText(e, 'Couldn’t post your date.'));

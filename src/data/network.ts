@@ -159,15 +159,29 @@ export const api = {
   conversations: () => request<D.ConversationsResponse>('GET', 'api/chat'),
   messages: (userId: string, page = 1, limit = 50) =>
     request<D.MessagesResponse>('GET', `api/chat/${userId}${q({ page, limit })}`),
+  sendMessageRequest: (userId: string, content: string) =>
+    request<D.SendRequestResponse>('POST', `api/chat/${userId}/request`, { content }),
+  declineMessageRequest: (userId: string) => request<unknown>('POST', `api/chat/${userId}/request/decline`),
 
   // ---------- Coins ----------
   wallet: () => request<D.WalletResponse>('GET', 'api/coins'),
   paystackInitialize: (productId: string) =>
     request<D.PaystackInitResponse>('POST', 'api/coins/paystack/initialize', { productId }),
   paystackVerify: (reference: string) => request<D.PurchaseResponse>('POST', 'api/coins/paystack/verify', { reference }),
-  unlockChat: (userId: string) => request<D.UnlockChatResponse>('POST', `api/coins/unlock-chat/${userId}`),
-  buyInsights: () => request<D.InsightsResponse>('POST', 'api/coins/insights'),
+  buyInsights: (days: 7 | 30) => request<D.InsightsResponse>('POST', 'api/coins/insights', { days }),
   markBonusSeen: (id: string) => request<unknown>('POST', `api/coins/bonus/${id}/seen`),
+
+  // ---------- Notifications ----------
+  notifications: () => request<D.NotificationsResponse>('GET', 'api/notifications'),
+  notificationsUnread: () => request<D.UnreadNotificationsResponse>('GET', 'api/notifications/unread-count'),
+  markNotificationsRead: () => request<D.UnreadNotificationsResponse>('POST', 'api/notifications/read'),
+
+  // ---------- Relun Plus ----------
+  plus: () => request<D.EntitlementsResponse>('GET', 'api/plus'),
+  plusInitialize: (plan: 'weekly' | 'monthly', renew: boolean) =>
+    request<D.PaystackInitResponse>('POST', 'api/plus/paystack/initialize', { plan, renew }),
+  plusVerify: (reference: string) => request<D.EntitlementsResponse>('POST', 'api/plus/paystack/verify', { reference }),
+  plusCancel: () => request<D.EntitlementsResponse>('POST', 'api/plus/cancel'),
 
   // ---------- Dates ----------
   browseDates: () => request<D.DatesResponse>('GET', 'api/dates'),
