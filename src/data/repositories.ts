@@ -1,0 +1,424 @@
+import type * as D from './dtos';
+import { defaultSettings } from './dtos';
+import {
+  emptyWallet,
+  parseDate,
+  segmentFrom,
+  toDatePost,
+  toPerson,
+  type ChatMessage,
+  type Conversation,
+  type Person,
+  type Photo,
+} from './models';
+import { api, ApiException, setSessionExpiredHandler } from './network';
+import { session } from './session';
+import { chatSocket } from './socket';
+import { getApp, setApp, type MyProfile, type OnboardingStart } from './store';
+import { Emitter } from '../util/emitter';
+
+/*
+ * The web counterpart of Android's repositories + AppContainer. Functions throw
+ * ApiException on failure (Android returns Result); callers use try/catch.
+ */
+
+export const MIN_PHOTOS = 2;
+export const MAX_PHOTOS = 3;
+
+export type ContactMethod = 'phone' | 'email';
+
+const contactBody = (method: ContactMethod, contact: string): D.ContactBody =>
+  method === 'phone' ? { phone: contact } : { email: contact.trim().toLowerCase() };
+
+// ---------- Auth ----------
+
+export const auth = {
+  /** Decides where a cold start lands. Offline with a saved session goes straight in. */
+  async bootstrap() {
+    if (!session.isSignedIn) {
+      setApp({ auth: { kind: 'signedOut' } });
+      return;
+    }
+    try {
+      const me = await api.myProfile();
+      setApp({ segment: segmentFrom(me.profile?.segment) });
+      if (!me.user?.fullName?.trim() || !me.user?.dateOfBirth) auth.enterOnboarding('segment');
+      else if ((me.photos ?? []).length < MIN_PHOTOS) auth.enterOnboarding('photos');
+      else setSignedIn();
+    } catch (e) {
+      if (e instanceof ApiException && e.isUnauthorized) await auth.signOutLocally();
+      else setSignedIn();
+    }
+  },
+
+  requestCode: (method: ContactMethod, contact: string) => api.requestOtp(contactBody(method, contact)),
+
+  async verifyCode(method: ContactMethod, contact: string, code: string) {
+    const res = await api.verifyOtp({ ...contactBody(method, contact), otp: code });
+    session.saveSignIn(res.accessToken, res.refreshToken, res.user.id, method);
+    setApp({ segment: segmentFrom(res.user.profile?.segment) });
+    return {
+      needsProfile: res.needsProfileCompletion ?? true,
+      needsPhotos: (res.photoCount ?? 0) < MIN_PHOTOS,
+    };
+  },
+
+  setSegment: (segment: 'relationship' | 'fun') => setApp({ segment }),
+  enterOnboarding: (start: OnboardingStart) => setApp({ auth: { kind: 'onboarding', start } }),
+  finishOnboarding: () => setSignedIn(),
+
+  async signOut() {
+    try {
+      await api.logout();
+    } catch {
+      // Signing out locally is what matters.
+    }
+    await auth.signOutLocally();
+  },
+
+  async deleteAccount() {
+    await api.deleteAccount();
+    await auth.signOutLocally();
+  },
+
+  /** Clears everything on this device. Safe to call more than once. */
+  async signOutLocally() {
+    chatSocket.disconnect();
+    chat.openChatUserId = null;
+    session.clear();
+    setApp({
+      auth: { kind: 'signedOut' },
+      segment: 'relationship',
+      me: null,
+      wallet: emptyWallet,
+      settings: defaultSettings,
+      unreadTotal: 0,
+    });
+  },
+};
+
+setSessionExpiredHandler(() => {
+  if (getApp().auth.kind !== 'signedOut') void auth.signOutLocally();
+});
+
+/** Everything a signed-in session needs, started once per sign-in. */
+function setSignedIn() {
+  const already = getApp().auth.kind === 'signedIn';
+  setApp({ auth: { kind: 'signedIn' } });
+  if (already) return;
+  if (document.visibilityState === 'visible') chatSocket.connect();
+  void coins.refresh().catch(() => {});
+  void profile.refresh().catch(() => {});
+  void settings.refresh().catch(() => {});
+  chat.refreshUnread();
+}
+
+// A refreshed access token means the socket's handshake token is stale.
+let lastToken = session.current.accessToken;
+session.subscribe((s) => {
+  if (s.accessToken !== lastToken) {
+    lastToken = s.accessToken;
+    if (s.accessToken && getApp().auth.kind === 'signedIn' && document.visibilityState === 'visible') {
+      chatSocket.pause();
+      chatSocket.connect();
+    }
+  }
+});
+
+// The server pushes only to users with no live socket, so drop it while hidden.
+document.addEventListener('visibilitychange', () => {
+  if (getApp().auth.kind !== 'signedIn') return;
+  if (document.visibilityState === 'visible') {
+    chatSocket.connect();
+    chat.refreshUnread();
+    void coins.refresh().catch(() => {});
+  } else {
+    chatSocket.pause();
+  }
+});
+
+chatSocket.connectedChanges.on((connected) => setApp({ socketConnected: connected }));
+
+// ---------- My profile ----------
+
+const toMyProfile = (r: D.MyProfileResponse): MyProfile => ({
+  name: r.user?.fullName ?? '',
+  dateOfBirth: r.user?.dateOfBirth?.slice(0, 10) ?? null,
+  bio: r.profile?.bio ?? '',
+  occupation: r.profile?.occupation ?? null,
+  education: r.profile?.education ?? null,
+  city: r.profile?.city ?? null,
+  interests: r.profile?.interests ?? [],
+  segment: segmentFrom(r.profile?.segment),
+  photos: [...(r.photos ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => ({ id: p._id, url: p.url })),
+  email: r.user?.email ?? null,
+  phone: r.user?.phone ?? null,
+});
+
+const updateMe = (fn: (me: MyProfile) => MyProfile) => {
+  const me = getApp().me;
+  if (me) setApp({ me: fn(me) });
+};
+
+export const profile = {
+  async refresh(): Promise<MyProfile> {
+    const me = toMyProfile(await api.myProfile());
+    setApp({ me });
+    return me;
+  },
+  completeProfile: (body: D.CompleteProfileBody) => api.completeProfile(body),
+  updateLocation: (latitude: number, longitude: number, city: string | null) =>
+    api.updateProfile({ latitude, longitude, city: city ?? undefined }),
+  updateCity: (city: string) => api.updateProfile({ city }),
+  async updateDetails(body: D.UpdateProfileBody) {
+    await api.updateProfile(body);
+    await profile.refresh().catch(() => {});
+  },
+  async uploadPhoto(jpeg: Blob): Promise<Photo> {
+    const dto = await api.uploadPhoto(jpeg);
+    const photo = { id: dto._id, url: dto.url };
+    updateMe((me) => ({ ...me, photos: [...me.photos, photo] }));
+    return photo;
+  },
+  async replacePhoto(photoId: string, jpeg: Blob): Promise<Photo> {
+    const dto = await api.replacePhoto(photoId, jpeg);
+    const photo = { id: dto._id, url: dto.url };
+    updateMe((me) => ({ ...me, photos: me.photos.map((p) => (p.id === photoId ? photo : p)) }));
+    return photo;
+  },
+  async deletePhoto(photoId: string) {
+    await api.deletePhoto(photoId);
+    updateMe((me) => ({ ...me, photos: me.photos.filter((p) => p.id !== photoId) }));
+  },
+};
+
+/** Age from a yyyy-mm-dd date of birth. */
+export const calculateAge = (dob: string | Date, today = new Date()): number => {
+  const d = typeof dob === 'string' ? new Date(`${dob.slice(0, 10)}T00:00:00`) : dob;
+  let age = today.getFullYear() - d.getFullYear();
+  const m = today.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+  return age;
+};
+
+/** Same weighting the profile ring shows: basics, bio, photos, details. */
+export const completeness = (me: MyProfile): number => {
+  let score = 30;
+  if (me.bio.trim()) score += 15;
+  score += me.photos.length * 10;
+  if (me.name.trim()) score += 5;
+  if (me.occupation?.trim()) score += 5;
+  if (me.interests.length) score += 5;
+  if (me.city?.trim()) score += 10;
+  return Math.min(score, 100);
+};
+
+// ---------- People ----------
+
+export type LockedPeople = {
+  locked: boolean;
+  count: number;
+  people: Person[];
+  /** Profile views only: when each person (by id) last viewed the user. */
+  viewedAt?: Record<string, Date>;
+};
+
+/** Something changed between the user and another person; open lists update from these. */
+export type PeopleEvent =
+  | { type: 'liked'; userId: string; isMatch: boolean }
+  | { type: 'unliked'; userId: string }
+  | { type: 'passed'; userId: string }
+  | { type: 'blocked'; userId: string }
+  | { type: 'unblocked'; userId: string }
+  | { type: 'chatUnlocked'; userId: string }
+  | { type: 'insightsUnlocked' }
+  | { type: 'matchesChanged' };
+
+export const people = {
+  /** Emits when a like is mutual; the shell shows the match celebration. */
+  newMatches: new Emitter<Person>(),
+  events: new Emitter<PeopleEvent>(),
+
+  discover: async (latitude: number | null, longitude: number | null) =>
+    ((await api.discover(latitude, longitude)).users ?? []).map(toPerson),
+  person: async (userId: string) => toPerson(await api.person(userId)),
+
+  /** Likes [person]. Returns true when it made a match. */
+  async like(person: Person): Promise<boolean> {
+    const res = await api.like(person.id);
+    const mutual = res.isMutual ?? false;
+    if (mutual && !res.alreadyLiked) people.newMatches.emit({ ...person, isMatch: true, liked: true });
+    people.events.emit({ type: 'liked', userId: person.id, isMatch: mutual });
+    return mutual;
+  },
+  async unlike(userId: string) {
+    await api.unlike(userId);
+    people.events.emit({ type: 'unliked', userId });
+  },
+  async pass(userId: string) {
+    await api.pass(userId);
+    people.events.emit({ type: 'passed', userId });
+  },
+  matches: async () => ((await api.matches()).matches ?? []).map((c) => ({ ...toPerson(c), isMatch: true })),
+  async receivedLikes(): Promise<LockedPeople> {
+    const r = await api.receivedLikes();
+    return { locked: r.locked ?? true, count: r.count ?? 0, people: (r.likes ?? []).map(toPerson) };
+  },
+  async profileViews(): Promise<LockedPeople> {
+    const r = await api.profileViews();
+    const viewedAt: Record<string, Date> = {};
+    for (const card of r.views ?? []) {
+      const at = parseDate(card.viewedAt);
+      if (at) viewedAt[card.user._id] = at;
+    }
+    return { locked: r.locked ?? true, count: r.count ?? 0, people: (r.views ?? []).map(toPerson), viewedAt };
+  },
+  emit: (event: PeopleEvent) => people.events.emit(event),
+};
+
+// ---------- Chat ----------
+
+const myId = () => session.current.userId ?? '';
+
+const toChatMessage = (m: D.MessageDto, clientId: string | null = null): ChatMessage => ({
+  id: m._id,
+  clientId,
+  mine: m.senderId === myId(),
+  text: m.content,
+  sentAt: parseDate(m.createdAt) ?? new Date(),
+  status: m.senderId === myId() && m.isRead ? 'read' : 'sent',
+});
+
+export const chat = {
+  socket: chatSocket,
+  /** The chat currently on screen, so incoming messages there don't count as unread. */
+  openChatUserId: null as string | null,
+
+  async conversations(): Promise<Conversation[]> {
+    const res = await api.conversations();
+    const list = (res.conversations ?? []).flatMap((conv) => {
+      const other = conv.otherUser;
+      if (!other) return [];
+      return [
+        {
+          userId: other._id,
+          name: other.fullName || 'Relun user',
+          lastMessage: conv.lastMessage.content,
+          lastFromMe: conv.lastMessage.senderId === myId(),
+          lastAt: parseDate(conv.lastMessage.createdAt) ?? new Date(),
+          unread: conv.unreadCount ?? 0,
+          chatUnlocked: conv.chatUnlocked ?? true,
+        },
+      ];
+    });
+    setApp({ unreadTotal: list.filter((c) => c.unread > 0).length });
+    return list;
+  },
+  refreshUnread() {
+    void chat.conversations().catch(() => {});
+  },
+  history: async (userId: string) => ((await api.messages(userId)).messages ?? []).map((m) => toChatMessage(m)),
+  toChatMessage,
+};
+
+chatSocket.events.on((event) => {
+  if (event.type === 'messageNotification' && event.message.senderId !== chat.openChatUserId) chat.refreshUnread();
+});
+
+// ---------- Coins ----------
+
+const updateWallet = (patch: Partial<ReturnType<typeof getApp>['wallet']>) =>
+  setApp({ wallet: { ...getApp().wallet, ...patch } });
+
+/** Coin balance and the things coins buy. The balance always comes from the server. */
+export const coins = {
+  async refresh() {
+    const res = await api.wallet();
+    setApp({
+      wallet: {
+        balance: res.balance ?? 0,
+        insightsActive: res.insightsActive ?? false,
+        chatUnlockCost: res.costs?.chatUnlock ?? 15,
+        insightsCost: res.costs?.insights ?? 20,
+        packages: res.packages ?? [],
+        pendingBonus: res.pendingBonus ?? null,
+      },
+    });
+  },
+  /** The welcome sheet was shown; the server stops reporting this bonus. */
+  async markBonusSeen(id: string) {
+    updateWallet({ pendingBonus: null });
+    await api.markBonusSeen(id).catch(() => {});
+  },
+  async unlockChat(userId: string) {
+    const res = await api.unlockChat(userId);
+    updateWallet({ balance: res.balance ?? 0 });
+    return { unlocked: res.unlocked ?? false, charged: res.charged ?? 0, balance: res.balance ?? 0 };
+  },
+  async buyInsights() {
+    const res = await api.buyInsights();
+    updateWallet({ balance: res.balance ?? 0, insightsActive: true });
+  },
+  /** Hands a Paystack reference to the server, which verifies it and credits coins. */
+  async confirmPaystack(reference: string) {
+    const res = await api.paystackVerify(reference);
+    updateWallet({ balance: res.balance ?? 0 });
+    return res.credited ?? 0;
+  },
+};
+
+// ---------- Dates, safety, settings ----------
+
+export const dates = {
+  browse: async () => ((await api.browseDates()).dates ?? []).map(toDatePost),
+  mine: async () => ((await api.myDates()).dates ?? []).map(toDatePost),
+  create: async (activity: string, place: string, at: Date, description: string | null) =>
+    toDatePost(
+      (
+        await api.createDate({
+          activity: activity.trim(),
+          place: place.trim(),
+          scheduledFor: at.toISOString(),
+          description: description?.trim() || undefined,
+        })
+      ).date,
+    ),
+  delete: (dateId: string) => api.deleteDate(dateId),
+  join: (dateId: string) => api.requestToJoin(dateId),
+  respond: (dateId: string, requestId: string, accept: boolean) =>
+    api.respondToRequest(dateId, requestId, accept ? 'accepted' : 'declined'),
+};
+
+export const safety = {
+  async block(userId: string) {
+    await api.block(userId);
+    people.emit({ type: 'blocked', userId });
+  },
+  async unblock(userId: string) {
+    await api.unblock(userId);
+    people.emit({ type: 'unblocked', userId });
+  },
+  report: (userId: string, reason: string, details: string | null) => api.report(userId, reason, details),
+  blocked: async () => (await api.blocks()).blocks ?? [],
+};
+
+export const settings = {
+  async refresh() {
+    const res = await api.settings();
+    setApp({ settings: { ...defaultSettings, ...res.settings } });
+  },
+  /** Applies [patch] locally first so toggles feel instant, then reconciles. */
+  async update(patch: D.SettingsPatch, optimistic: D.SettingsDto) {
+    const previous = getApp().settings;
+    setApp({ settings: optimistic });
+    try {
+      const res = await api.updateSettings(patch);
+      const next = { ...defaultSettings, ...res.settings };
+      setApp({ settings: next });
+      return next;
+    } catch (e) {
+      setApp({ settings: previous });
+      throw e;
+    }
+  },
+};
